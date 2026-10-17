@@ -8,6 +8,8 @@ from dataclasses import asdict, dataclass, field
 MODES = ("single", "ddp", "sync", "localsgd")
 DEVICES = ("cuda", "cpu")
 LR_SCALING = ("linear", "none")
+OUTER_OPTIMIZERS = ("avg", "nesterov")
+COMM_DTYPES = ("fp32", "fp16", "bf16")
 
 
 class ConfigError(ValueError):
@@ -61,6 +63,12 @@ class ExperimentSpec:
     eval_every_epochs: int = 1
     log_every_steps: int = 50
     local_steps: int = 1                # H, localsgd only
+    # localsgd only. avg = plain parameter averaging (FedAvg); nesterov = DiLoCo-style
+    # outer step on the averaged pseudo-gradient. avg == nesterov with lr 1, momentum 0.
+    outer_optimizer: str = "avg"
+    outer_lr: float = 1.0
+    outer_momentum: float = 0.0
+    comm_dtype: str = "fp32"            # what goes over the network: fp32 | fp16 | bf16
     seed: int = 0
     master_port: int = 29500
     timeout_s: int = 600
@@ -86,6 +94,20 @@ class ExperimentSpec:
             raise ConfigError("local_steps phải >= 1")
         if self.batch_size < 1 or self.max_epochs < 1 or self.eval_every_epochs < 1:
             raise ConfigError("batch_size, max_epochs, eval_every_epochs phải >= 1")
+        if self.outer_optimizer not in OUTER_OPTIMIZERS:
+            raise ConfigError(f"outer_optimizer phải là một trong {OUTER_OPTIMIZERS}")
+        if self.comm_dtype not in COMM_DTYPES:
+            raise ConfigError(f"comm_dtype phải là một trong {COMM_DTYPES}")
+        if self.outer_lr <= 0 or not 0 <= self.outer_momentum < 1:
+            raise ConfigError("outer_lr phải > 0 và outer_momentum trong [0, 1)")
+        if self.mode != "localsgd" and (self.outer_optimizer != "avg" or self.outer_lr != 1.0
+                                        or self.outer_momentum != 0.0):
+            raise ConfigError("outer_optimizer, outer_lr, outer_momentum chỉ dùng với mode=localsgd")
+        if self.outer_optimizer == "avg" and (self.outer_lr != 1.0 or self.outer_momentum != 0.0):
+            raise ConfigError("outer_optimizer=avg không dùng outer_lr/outer_momentum; "
+                              "đặt outer_optimizer=nesterov")
+        if self.mode == "single" and self.comm_dtype != "fp32":
+            raise ConfigError("mode=single không giao tiếp; comm_dtype phải là fp32")
         if self.target_acc is not None and not 0 < self.target_acc <= 1:
             raise ConfigError("target_acc là tỉ lệ trong (0, 1], ví dụ 0.85")
 

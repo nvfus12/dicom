@@ -1,6 +1,7 @@
 # E2b: DDP trên cả 3 máy (GPU không đồng nhất).
 # Nếu DDP lỗi với CUDA trên Windows, chạy lại với --set mode=sync.
 mode: ddp
+comm_dtype: fp32       # fp16 | bf16 nén gradient trước all-reduce (DDP comm hook)
 workers: [doan-tuan, nguyen-duc, trinh-duc]
 model: resnet20
 dataset: cifar10

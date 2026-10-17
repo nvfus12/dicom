@@ -18,7 +18,8 @@ The first benchmark round assumes stable conditions: no machine is reclaimed mid
 
 ## The prototype in short
 
-- Training modes: `single` (one GPU), `ddp` (PyTorch DistributedDataParallel), `sync` (manual gradient all-reduce, separates communication time) and `localsgd` (average parameters every H steps).
+- Training modes: `single` (one GPU), `ddp` (PyTorch DistributedDataParallel), `sync` (manual gradient all-reduce, separates communication time) and `localsgd` (synchronise every H steps, with either plain averaging or a DiLoCo-style Nesterov outer step).
+- Optional half-precision transfer (`comm_dtype: fp16 | bf16`) halves the bytes sent over the network.
 - Backend: gloo over TCP, the only multi-node option on Windows. Workloads: CIFAR-10 with ResNet-20 or ResNet-18.
 - Clean architecture: a `domain` core that only sees interfaces, `adapters` for CUDA/CPU, gloo, datasets and logging, and an `app` layer that wires them together.
 - **Every machine is one YAML file** in `prototype/configs/machines/`. Adding a machine means adding a file and listing its name in an experiment; no code changes.

@@ -2,7 +2,16 @@
 # Quét H bằng --set local_steps=4 | 16 | 64 | 256 | 512 (giống nhau trên mọi máy).
 # Qua internet nên ưu tiên H lớn: mỗi lần đồng bộ rất đắt so với một bước tính toán.
 # lr không nhân theo số worker: mỗi worker huấn luyện như 1 GPU rồi lấy trung bình.
+# Outer optimizer:
+#   avg      : trung bình tham số đơn giản (FedAvg) — baseline
+#   nesterov : kiểu DiLoCo, ví dụ --set outer_optimizer=nesterov --set outer_lr=0.7 --set outer_momentum=0.9
+#              Với ResNet-20/CIFAR, momentum ngoài quá cao có thể làm hỏng accuracy (Lin et al. 2020): quét {0, 0.5, 0.9}.
+# comm_dtype: fp32 | fp16 | bf16 — độ chính xác của dữ liệu gửi qua mạng (fp16 giảm một nửa băng thông).
 mode: localsgd
+outer_optimizer: avg
+outer_lr: 1.0
+outer_momentum: 0.0
+comm_dtype: fp32
 workers: [doan-tuan, nguyen-duc, trinh-duc]
 local_steps: 16
 model: resnet20

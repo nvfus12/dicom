@@ -36,6 +36,11 @@ def summarise(events: list[dict]) -> dict:
         "workers": "+".join(exp["workers"]),
         "model": exp["model"],
         "local_steps": exp["local_steps"] if exp["mode"] == "localsgd" else "",
+        "outer_optimizer": exp.get("outer_optimizer", "avg") if exp["mode"] == "localsgd" else "",
+        "outer_lr": exp.get("outer_lr", 1.0) if exp["mode"] == "localsgd" else "",
+        "outer_momentum": exp.get("outer_momentum", 0.0) if exp["mode"] == "localsgd" else "",
+        "comm_dtype": exp.get("comm_dtype", "fp32"),
+        "sync_rounds": end.get("sync_rounds"),
         "batch_per_worker": exp["batch_size"],
         "stop_reason": end.get("stop_reason", "INCOMPLETE"),
         "best_acc": end.get("best_acc"),
@@ -66,6 +71,7 @@ def main() -> int:
         writer.writerows(rows)
     for r in rows:
         print(f"{r['run_id']:<45} {r['mode']:<8} H={r['local_steps'] or '-':<3} "
+              f"outer={r['outer_optimizer'] or '-'} {r['comm_dtype']} "
               f"acc={r['best_acc']} ttt={r['time_to_target_s']} comm={r['comm_share']}")
     print(f"Đã ghi {out_csv}")
 

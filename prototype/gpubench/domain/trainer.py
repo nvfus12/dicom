@@ -164,6 +164,7 @@ class Trainer:
                            **window.flush(), gpu=self.monitor.sample())
         result = TrainResult(stop_reason, step, epochs_done, train_time, best_acc, time_to_target)
         self.sink.emit("train_end", stop_reason=stop_reason, steps=step, epochs=epochs_done,
+                       sync_rounds=getattr(self.strategy, "rounds", None),
                        train_time_s=train_time, best_acc=best_acc,
                        time_to_target_s=time_to_target,
                        peak_memory_bytes=device.peak_memory_bytes())

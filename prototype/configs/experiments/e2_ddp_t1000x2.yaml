@@ -2,6 +2,7 @@
 # Rank 0 (máy đầu danh sách) mở cổng master_port để các máy khác kết nối.
 # Nếu DDP lỗi với CUDA trên Windows, chạy lại với --set mode=sync (all-reduce gradient thủ công).
 mode: ddp
+comm_dtype: fp32       # fp16 | bf16 nén gradient trước all-reduce (DDP comm hook)
 workers: [nguyen-duc, trinh-duc]
 model: resnet20
 dataset: cifar10

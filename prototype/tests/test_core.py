@@ -21,7 +21,7 @@ from gpubench.adapters.models import tiny_cnn  # noqa: E402
 from gpubench.app.config_loader import load_experiment, load_machine, list_machines  # noqa: E402
 from gpubench.domain.config import ConfigError, ExperimentSpec  # noqa: E402
 from gpubench.app.netcheck import parse_tailscale_ping  # noqa: E402
-from gpubench.domain.sync import build_strategy  # noqa: E402
+from gpubench.domain.sync import build_strategy, outer_update_  # noqa: E402
 
 WORLD = 3
 
@@ -42,49 +42,103 @@ def _same_on_all_ranks(t: torch.Tensor) -> bool:
     return all(torch.allclose(gathered[0], g) for g in gathered[1:])
 
 
-def _worker(rank: int, port: int, mode: str, local_steps: int, results) -> None:
+def _worker(rank: int, port: int, mode: str, options: dict, results) -> None:
     comm = GlooComm("127.0.0.1", port, rank, WORLD, timeout_s=60)
     try:
         device = CpuDevice()
         torch.manual_seed(0)
         model = tiny_cnn()
         torch.manual_seed(100 + rank)           # different data per rank
-        strategy = build_strategy(mode, comm, device, local_steps)
+        strategy = build_strategy(mode, comm, device, **options)
         model = strategy.prepare(model)
         opt = torch.optim.SGD(model.parameters(), lr=0.1, momentum=0.9)
-        same_after = []
+        same_after, mean_err = [], []
+        h = options.get("local_steps", 1)
         for step in range(1, 5):
             x, y = torch.randn(8, 3, 32, 32), torch.randint(0, 10, (8,))
             torch.nn.functional.cross_entropy(model(x), y).backward()
             strategy.after_backward(model)
             opt.step()
             opt.zero_grad()
+            syncing = mode == "localsgd" and step % h == 0
+            if syncing:
+                # Plain mean of the workers' models just before synchronisation.
+                before = _flat_params(model)
+                gathered = [torch.empty_like(before) for _ in range(WORLD)]
+                dist.all_gather(gathered, before)
+                expected_mean = torch.stack(gathered).mean(0)
             strategy.after_step(model, step)
-            same_after.append(_same_on_all_ranks(_flat_params(strategy.unwrap(model))))
+            after = _flat_params(strategy.unwrap(model))
+            same_after.append(_same_on_all_ranks(after))
+            if syncing:
+                mean_err.append((after - expected_mean).abs().max().item())
         if rank == 0:
-            results[mode] = same_after
+            results["out"] = {"same": same_after, "mean_err": mean_err}
     finally:
         comm.close()
 
 
-def _run(mode: str, local_steps: int = 1) -> list[bool]:
+def _run(mode: str, **options) -> dict:
     port = _free_port()
     with mp.Manager() as manager:
         results = manager.dict()
-        mp.spawn(_worker, args=(port, mode, local_steps, results), nprocs=WORLD, join=True)
-        return list(results[mode])
+        mp.spawn(_worker, args=(port, mode, options, results), nprocs=WORLD, join=True)
+        return dict(results["out"])
 
 
 class SyncStrategyTest(unittest.TestCase):
     def test_sync_keeps_models_identical(self):
-        self.assertEqual(_run("sync"), [True, True, True, True])
+        for dtype in ("fp32", "fp16", "bf16"):
+            with self.subTest(comm_dtype=dtype):
+                self.assertEqual(_run("sync", comm_dtype=dtype)["same"], [True] * 4)
 
     def test_ddp_keeps_models_identical(self):
-        self.assertEqual(_run("ddp"), [True, True, True, True])
+        for dtype in ("fp32", "fp16"):
+            with self.subTest(comm_dtype=dtype):
+                self.assertEqual(_run("ddp", comm_dtype=dtype)["same"], [True] * 4)
 
-    def test_localsgd_identical_only_after_averaging(self):
-        # H=2: models diverge after odd steps, agree right after each averaging.
-        self.assertEqual(_run("localsgd", local_steps=2), [False, True, False, True])
+    def test_localsgd_avg_is_exact_mean_of_workers(self):
+        # H=2: models diverge after odd steps, agree right after each averaging,
+        # and the agreed model is the plain mean of the workers' models.
+        out = _run("localsgd", local_steps=2)
+        self.assertEqual(out["same"], [False, True, False, True])
+        self.assertLess(max(out["mean_err"]), 1e-6)
+
+    def test_localsgd_nesterov_without_momentum_equals_avg(self):
+        out = _run("localsgd", local_steps=2, outer_optimizer="nesterov")
+        self.assertLess(max(out["mean_err"]), 1e-6)
+
+    def test_localsgd_diloco_moves_beyond_the_mean(self):
+        out = _run("localsgd", local_steps=2, outer_optimizer="nesterov",
+                   outer_lr=0.7, outer_momentum=0.9)
+        self.assertEqual(out["same"], [False, True, False, True])
+        self.assertGreater(max(out["mean_err"]), 1e-4)
+
+    def test_localsgd_fp16_close_to_exact_mean(self):
+        for dtype in ("fp16", "bf16"):
+            with self.subTest(comm_dtype=dtype):
+                out = _run("localsgd", local_steps=2, comm_dtype=dtype)
+                self.assertEqual(out["same"], [False, True, False, True])
+                # Only the pseudo-gradient is rounded, never the weights themselves.
+                self.assertLess(max(out["mean_err"]), 1e-3)
+
+
+class OuterUpdateTest(unittest.TestCase):
+    def test_matches_torch_sgd_nesterov(self):
+        # The outer step is SGD-Nesterov with the pseudo-gradient as gradient.
+        ref = torch.nn.Parameter(torch.tensor([1.0, -2.0]))
+        opt = torch.optim.SGD([ref], lr=0.7, momentum=0.9, nesterov=True)
+        mine, buf = torch.tensor([1.0, -2.0]), torch.zeros(2)
+        for g in (torch.tensor([0.1, 0.3]), torch.tensor([-0.2, 0.05]), torch.tensor([0.4, 0.0])):
+            ref.grad = g.clone()
+            opt.step()
+            outer_update_(mine, g, buf, lr=0.7, momentum=0.9)
+            self.assertTrue(torch.allclose(mine, ref.detach(), atol=1e-6))
+
+    def test_lr_one_no_momentum_is_plain_subtraction(self):
+        g = torch.tensor([1.0, 2.0])
+        outer_update_(g, torch.tensor([0.25, -0.5]), None, lr=1.0, momentum=0.0)
+        self.assertTrue(torch.equal(g, torch.tensor([0.75, 2.5])))
 
 
 class ConfigTest(unittest.TestCase):
@@ -103,6 +157,23 @@ class ConfigTest(unittest.TestCase):
         a = load_experiment("e3_localsgd_x3")
         b = load_experiment("e3_localsgd_x3", {"local_steps": 64})
         self.assertNotEqual(a.fingerprint(), b.fingerprint())
+
+    def test_outer_options_rejected_outside_localsgd(self):
+        with self.assertRaises(ConfigError):
+            ExperimentSpec(name="x", mode="ddp", workers=("a", "b"),
+                           outer_optimizer="nesterov").validate()
+
+    def test_avg_rejects_outer_hyperparameters(self):
+        with self.assertRaises(ConfigError):
+            ExperimentSpec(name="x", mode="localsgd", workers=("a", "b"), outer_lr=0.7).validate()
+
+    def test_comm_dtype_validation(self):
+        with self.assertRaises(ConfigError):
+            ExperimentSpec(name="x", mode="sync", workers=("a", "b"), comm_dtype="int8").validate()
+        with self.assertRaises(ConfigError):
+            ExperimentSpec(name="x", mode="single", workers=("a",), comm_dtype="fp16").validate()
+        ExperimentSpec(name="x", mode="localsgd", workers=("a", "b"), outer_optimizer="nesterov",
+                       outer_lr=0.7, outer_momentum=0.9, comm_dtype="fp16").validate()
 
     def test_single_mode_rejects_many_workers(self):
         with self.assertRaises(ConfigError):

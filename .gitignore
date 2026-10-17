@@ -47,3 +47,6 @@ prototype/PLAN.md
 main.tex
 *.tex
 *.pdf
+
+# Internal research notes
+research/

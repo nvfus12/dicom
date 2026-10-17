@@ -7,7 +7,8 @@ Benchmark code that compares single GPU, DDP and local SGD by **time to reach a 
 | Item | Status |
 |---|---|
 | 3 simulated CPU workers over gloo (TCP on localhost), all 4 modes: single / ddp / sync / localsgd | Runs end to end, PyTorch 2.6.0 |
-| Parameter-synchronisation tests (`tests/`) | 8/8 pass, PyTorch 2.6.0 |
+| Synchronisation tests (`tests/`): models stay identical; `avg` equals the exact mean of the workers; DiLoCo outer step equals `torch.optim.SGD(nesterov=True)`; fp16/bf16 transfer | 19/19 pass, PyTorch 2.6.0 |
+| DDP with the bf16 compression hook | **Not tested** (fp16 hook is tested) |
 | Machines with mismatched configs → all stop together with a clear error, no hang | Tried |
 | `netcheck` between 3 simulated workers on localhost | Runs; parsing of `tailscale ping` output is unit-tested, but the real `tailscale` CLI was never run |
 | Running over a VPN/internet | **Not yet** |
@@ -23,7 +24,7 @@ gpubench/
   domain/      core; knows nothing about YAML, network, NVML or torchvision
     config.py    MachineProfile (differs per machine), ExperimentSpec (identical on all machines)
     ports.py     interfaces: Device, Communicator, DatasetProvider, MetricsSink, GpuMonitor
-    sync.py      synchronisation strategies: single, ddp, sync, localsgd
+    sync.py      synchronisation strategies: single, ddp, sync, localsgd (avg or DiLoCo outer step)
     trainer.py   training loop, timing, stop when the target is reached
   adapters/    implementations of the interfaces
     device.py    CudaDevice, CpuDevice
@@ -108,7 +109,9 @@ python -m gpubench plan -e e3_localsgd_x3 --set local_steps=16
 | E1 baseline | `python -m gpubench run -m <machine> -e e1_single` (add `--set model=resnet18`) |
 | E2 DDP, 2 identical GPUs | `python -m gpubench run -m <machine> -e e2_ddp_t1000x2` |
 | E2 DDP, 3 machines | `python -m gpubench run -m <machine> -e e2_ddp_x3` |
-| E3 local SGD | `python -m gpubench run -m <machine> -e e3_localsgd_x3 --set local_steps=4` (then 16, 64, 256, 512) |
+| E3 local SGD, plain averaging | `python -m gpubench run -m <machine> -e e3_localsgd_x3 --set local_steps=4` (then 16, 64, 256, 512) |
+| E3 local SGD, DiLoCo | add `--set outer_optimizer=nesterov --set outer_lr=0.7 --set outer_momentum=0.9` (sweep momentum 0, 0.5, 0.9) |
+| Half-precision transfer | add `--set comm_dtype=fp16` (or `bf16`) to any distributed experiment |
 | Network check | `python -m gpubench netcheck -m <machine> -e e3_localsgd_x3` |
 
 `--set` must be identical on all machines. If it differs, every machine stops together and reports a fingerprint mismatch.
@@ -143,5 +146,10 @@ On Windows this needs a PyTorch version other than 2.10 (see the version warning
 - `comm_s` includes time **waiting for the slowest machine**, because an all-reduce only completes when every machine arrives.
 - Mode `ddp` overlaps communication with the backward pass, so `comm_s` is 0 and communication time is inside `compute_s`. To separate communication, use `sync` (same operation, no overlap).
 - `comm_bytes` is the amount of data fed into all-reduce on one machine, not the number of bytes that actually crossed the network.
-- Local SGD: optimizer momentum stays local to each machine; only parameters and BatchNorm statistics are averaged. The learning rate is not scaled by the number of workers.
+- Local SGD keeps an fp32 copy of the global model. At each synchronisation every machine sends its pseudo-gradient (global minus local weights); the averaged pseudo-gradient drives the outer step:
+  - `outer_optimizer: avg` (default): the new global model is exactly the mean of the workers' models (FedAvg). This is the baseline.
+  - `outer_optimizer: nesterov`: SGD with Nesterov momentum on the pseudo-gradient, as in DiLoCo (Douillard et al., 2023). With `outer_lr: 1` and `outer_momentum: 0` it equals `avg`. DiLoCo used lr 0.7 and momentum 0.9 for language models; for ResNet-20 on CIFAR, Lin et al. (ICLR 2020) report that high global momentum can hurt accuracy, so sweep it.
+  - BatchNorm statistics are always plainly averaged; inner optimizer momentum stays local. The inner learning rate is not scaled by the number of workers.
+  - `sync_rounds` in `train_end` counts outer synchronisations.
+- `comm_dtype` (`fp32` / `fp16` / `bf16`) only changes what crosses the network; all model arithmetic stays fp32. In `localsgd` only the pseudo-gradient is rounded, never the weights. In `sync`, gradients are sent after AMP loss scaling, so fp16 may overflow and make the GradScaler skip steps; prefer `bf16` there when AMP is on. In `ddp` it uses PyTorch's DDP compression hooks.
 - DDP/sync: the learning rate is scaled linearly with the number of workers (`lr_scaling: linear`), with warmup.

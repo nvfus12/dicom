@@ -94,7 +94,9 @@ def run(machine_name: str, spec: ExperimentSpec, run_id: str | None = None,
             model = build_model(spec.model, data.num_classes).to(device.torch_device)
             torch.manual_seed(spec.seed + rank)   # different augmentation per worker
 
-            strategy = build_strategy(spec.mode, comm, device, spec.local_steps)
+            strategy = build_strategy(spec.mode, comm, device, spec.local_steps,
+                                      spec.outer_optimizer, spec.outer_lr, spec.outer_momentum,
+                                      spec.comm_dtype)
             trainer = Trainer(spec, model, data, device, comm, strategy, sink,
                               build_monitor(machine.device, machine.cuda_index))
             result = trainer.run()
