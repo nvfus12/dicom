@@ -1,0 +1,16 @@
+# Template for one real machine. Copy to configs/machines/<name>.yaml
+# (the file name must equal `name`), then fill in the values marked FILL.
+# Real machine files are git-ignored because they hold owners' names and IPs.
+name: machine-a
+owner: ""                # FILL (optional)
+address: null            # FILL: IPv4 of this machine on the network used for the run
+device: cuda             # cuda | cpu
+cuda_index: 0
+amp: false               # mixed precision; enable once verified on this GPU
+num_workers: 2           # DataLoader processes
+data_dir: ./data
+download: true
+max_batch: {}            # FILL from `python -m gpubench profile -m <name>`, e.g. {resnet20: 512}
+network_interface: null  # only if gloo picks the wrong network adapter
+env: {}
+notes: ""                # GPU model, VRAM, driver, OS

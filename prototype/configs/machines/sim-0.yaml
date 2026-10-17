@@ -1,0 +1,9 @@
+# Worker giả lập trên CPU của máy điều phối, dùng để kiểm thử code trước khi có 3 máy thật.
+name: sim-0
+owner: giả lập
+address: 127.0.0.1
+device: cpu
+num_workers: 0
+data_dir: ./data
+download: false
+notes: chạy bằng scripts/simulate.py

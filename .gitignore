@@ -1,0 +1,49 @@
+# Local machine data: real owners' names, hostnames and IPs. Never commit.
+hardware/
+prototype/configs/machines/doan-tuan.yaml
+prototype/configs/machines/nguyen-duc.yaml
+prototype/configs/machines/trinh-duc.yaml
+
+# Claude Code local project settings
+.claude/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Experiment data and outputs
+prototype/data/
+prototype/results/
+*.pt
+*.pth
+
+# LaTeX build artifacts
+*.aux
+*.log
+*.out
+*.toc
+*.synctex.gz
+*.fls
+*.fdb_latexmk
+*.bbl
+*.blg
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Planning documents and Jira exports: kept local, not published
+jira-plan.md
+jira-backlog.json
+opcom-plan.md
+opcom-backlog.json
+prototype/PLAN.md
+
+# Internal reports: kept local, not published
+main.tex
+*.tex
+*.pdf

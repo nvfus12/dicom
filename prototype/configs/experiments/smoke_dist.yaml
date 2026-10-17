@@ -1,0 +1,18 @@
+# Kiểm thử nhanh trên CPU với 3 worker giả lập và dữ liệu tổng hợp.
+# python scripts/simulate.py -e smoke_dist [--set mode=ddp|sync|localsgd]
+mode: localsgd
+workers: [sim-0, sim-1, sim-2]
+local_steps: 4
+model: tiny_cnn
+dataset: synthetic
+synthetic_samples: 3072
+batch_size: 32
+lr: 0.05
+warmup_epochs: 0
+max_epochs: 4
+target_acc: 0.9
+eval_every_epochs: 1
+log_every_steps: 10
+seed: 0
+master_port: 29511
+timeout_s: 120

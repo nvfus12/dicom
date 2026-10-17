@@ -1,0 +1,18 @@
+# E2b: DDP trên cả 3 máy (GPU không đồng nhất).
+# Nếu DDP lỗi với CUDA trên Windows, chạy lại với --set mode=sync.
+mode: ddp
+workers: [doan-tuan, nguyen-duc, trinh-duc]
+model: resnet20
+dataset: cifar10
+batch_size: 128
+lr: 0.1
+lr_scaling: linear
+warmup_epochs: 2
+max_epochs: 30
+target_acc: null
+max_train_minutes: 60
+eval_every_epochs: 1
+log_every_steps: 50
+seed: 0
+master_port: 29500
+timeout_s: 600

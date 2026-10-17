@@ -1,0 +1,5 @@
+# torch/torchvision cài riêng theo README (cần bản CUDA phù hợp driver, và KHÔNG dùng 2.10 trên Windows).
+pyyaml>=6
+numpy
+nvidia-ml-py      # telemetry GPU qua NVML; thiếu thì bỏ qua, không lỗi
+matplotlib        # chỉ cần trên máy chạy analyze.py

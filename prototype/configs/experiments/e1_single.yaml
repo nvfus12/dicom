@@ -1,0 +1,14 @@
+# E1: baseline 1 GPU. workers để trống: chạy trên máy gọi lệnh.
+# Đổi mô hình bằng --set model=resnet18
+mode: single
+model: resnet20
+dataset: cifar10
+batch_size: 128
+lr: 0.1
+warmup_epochs: 1
+max_epochs: 30
+target_acc: null        # ĐIỀN sau baseline, ví dụ 0.85
+max_train_minutes: 60
+eval_every_epochs: 1
+log_every_steps: 50
+seed: 0

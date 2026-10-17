@@ -1,0 +1,13 @@
+# Kiểm thử nhanh 1 worker trên CPU: python -m gpubench run -m sim-0 -e smoke_single
+mode: single
+model: tiny_cnn
+dataset: synthetic
+synthetic_samples: 2048
+batch_size: 32
+lr: 0.05
+warmup_epochs: 0
+max_epochs: 3
+target_acc: null
+eval_every_epochs: 1
+log_every_steps: 20
+seed: 0

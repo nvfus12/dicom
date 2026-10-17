@@ -1,0 +1,19 @@
+# E3: local SGD trên 3 máy, trung bình tham số mỗi local_steps bước.
+# Quét H bằng --set local_steps=4 | 16 | 64 (giống nhau trên mọi máy).
+# lr không nhân theo số worker: mỗi worker huấn luyện như 1 GPU rồi lấy trung bình.
+mode: localsgd
+workers: [doan-tuan, nguyen-duc, trinh-duc]
+local_steps: 16
+model: resnet20
+dataset: cifar10
+batch_size: 128
+lr: 0.1
+warmup_epochs: 1
+max_epochs: 30
+target_acc: null
+max_train_minutes: 60
+eval_every_epochs: 1
+log_every_steps: 50
+seed: 0
+master_port: 29500
+timeout_s: 600

@@ -1,0 +1,19 @@
+# E2a: DDP trên cặp máy đồng nhất (2 x Quadro T1000).
+# Rank 0 (máy đầu danh sách) mở cổng master_port để các máy khác kết nối.
+# Nếu DDP lỗi với CUDA trên Windows, chạy lại với --set mode=sync (all-reduce gradient thủ công).
+mode: ddp
+workers: [nguyen-duc, trinh-duc]
+model: resnet20
+dataset: cifar10
+batch_size: 128         # mỗi worker; global batch = 128 x số worker
+lr: 0.1                 # cho 1 worker; lr_scaling=linear nhân theo số worker
+lr_scaling: linear
+warmup_epochs: 2
+max_epochs: 30
+target_acc: null        # ĐIỀN: dùng cùng mốc với E1
+max_train_minutes: 60
+eval_every_epochs: 1
+log_every_steps: 50
+seed: 0
+master_port: 29500
+timeout_s: 600
