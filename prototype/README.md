@@ -9,6 +9,8 @@ Benchmark code that compares single GPU, DDP and local SGD by **time to reach a 
 | 3 simulated CPU workers over gloo (TCP on localhost), all 4 modes: single / ddp / sync / localsgd | Runs end to end, PyTorch 2.6.0 |
 | Parameter-synchronisation tests (`tests/`) | 8/8 pass, PyTorch 2.6.0 |
 | Machines with mismatched configs → all stop together with a clear error, no hang | Tried |
+| `netcheck` between 3 simulated workers on localhost | Runs; parsing of `tailscale ping` output is unit-tested, but the real `tailscale` CLI was never run |
+| Running over a VPN/internet | **Not yet** |
 | Real GPUs, real CIFAR-10, real network between 3 machines | **Not yet** (no access to the machines) |
 | DDP with CUDA tensors over gloo on Windows | **Not yet**. If it fails, use `--set mode=sync` |
 
@@ -31,7 +33,7 @@ gpubench/
     metrics.py   JSONL
     monitor.py   NVML (optional)
   app/         composition: read YAML, pick adapters, run
-  cli.py       python -m gpubench run|plan|check|profile|machines
+  cli.py       python -m gpubench run|plan|check|profile|netcheck|machines
 configs/
   machines/    ONE FILE PER MACHINE
   experiments/ one file per experiment
@@ -74,6 +76,25 @@ Do this on **each worker machine** (copy the whole `prototype/` folder over):
 
 When done, **copy the same `configs/` folder to every machine**: each machine must read the others' files to find rank 0.
 
+### Running over the internet (machines on different networks)
+
+Training uses gloo over direct TCP connections, and **every machine must reach every other machine** (full mesh); rank 0 is only the first meeting point. Laptops on home or campus networks sit behind NAT and cannot do this on their own. Port forwarding is usually impossible (CGNAT, campus firewalls), and the gloo port must **never be exposed to the public internet**: gloo has no encryption or authentication.
+
+Use a mesh VPN such as Tailscale, ZeroTier or WireGuard. Each machine gets a virtual IP and the code runs unchanged:
+
+1. Every owner installs the VPN client and joins the same virtual network (each owner does this themselves).
+2. In each machine file set `address` to the **VPN IP**, and `network_interface` to the VPN adapter name (for Tailscale on Windows this is normally `Tailscale`; check the adapter list on the machine). Without it, gloo may advertise a different adapter's address to the peers. This has not been tested on real machines.
+3. In Windows Defender Firewall allow `master_port` only from the VPN network.
+4. Measure the link with the same transport training will use:
+   ```bash
+   python -m gpubench netcheck -m <machine> -e e3_localsgd_x3
+   ```
+   Run it on every worker like a normal experiment. It prints round-trip latency and throughput per machine pair, the time of one all-reduce at the size of ResNet-20 (~1 MB) and ResNet-18 (~45 MB), and, if the `tailscale` CLI is installed, whether each peer is reached directly or through a relay. A relayed path is much slower and distorts the benchmark, so record it with every result. Output is also written to `results/netcheck-*/`.
+
+**Expect poor numbers for per-step synchronisation.** Residential upload bandwidth is often a few tens of Mbit/s. A 45 MB all-reduce may then take tens of seconds per step, so `ddp`/`sync` with ResNet-18 will very likely be slower than one GPU; this is a hypothesis to confirm with `netcheck`, not a measurement. `localsgd` pays the cost only every H steps, so sweep large H (up to 512). A slower-than-one-GPU result is still a valid result if it is measured and explained.
+
+No controller is needed for this: all workers stay online for the whole run, and rank 0 only hosts the rendezvous. A controller becomes necessary for workers that join or leave mid-run, or if a VPN cannot be used (then machines would have to call out to a relay server).
+
 ### Running experiments
 
 ```bash
@@ -87,7 +108,8 @@ python -m gpubench plan -e e3_localsgd_x3 --set local_steps=16
 | E1 baseline | `python -m gpubench run -m <machine> -e e1_single` (add `--set model=resnet18`) |
 | E2 DDP, 2 identical GPUs | `python -m gpubench run -m <machine> -e e2_ddp_t1000x2` |
 | E2 DDP, 3 machines | `python -m gpubench run -m <machine> -e e2_ddp_x3` |
-| E3 local SGD | `python -m gpubench run -m <machine> -e e3_localsgd_x3 --set local_steps=4` (then 16, 64) |
+| E3 local SGD | `python -m gpubench run -m <machine> -e e3_localsgd_x3 --set local_steps=4` (then 16, 64, 256, 512) |
+| Network check | `python -m gpubench netcheck -m <machine> -e e3_localsgd_x3` |
 
 `--set` must be identical on all machines. If it differs, every machine stops together and reports a fingerprint mismatch.
 

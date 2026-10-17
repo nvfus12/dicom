@@ -3,7 +3,7 @@
 # Real machine files are git-ignored because they hold owners' names and IPs.
 name: machine-a
 owner: ""                # FILL (optional)
-address: null            # FILL: IPv4 of this machine on the network used for the run
+address: null            # FILL: IPv4 of this machine on the network used for the run (VPN address when running over the internet)
 device: cuda             # cuda | cpu
 cuda_index: 0
 amp: false               # mixed precision; enable once verified on this GPU
@@ -11,6 +11,6 @@ num_workers: 2           # DataLoader processes
 data_dir: ./data
 download: true
 max_batch: {}            # FILL from `python -m gpubench profile -m <name>`, e.g. {resnet20: 512}
-network_interface: null  # only if gloo picks the wrong network adapter
+network_interface: null  # adapter name; set it (e.g. Tailscale) when the machine has a VPN or several adapters
 env: {}
 notes: ""                # GPU model, VRAM, driver, OS

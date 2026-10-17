@@ -135,6 +135,14 @@ def cmd_profile(args) -> int:
     return 0
 
 
+def cmd_netcheck(args) -> int:
+    from .app.netcheck import run_netcheck
+
+    spec = load_experiment(args.experiment, parse_overrides(args.set))
+    run_netcheck(args.machine, spec)
+    return 0
+
+
 def cmd_machines(args) -> int:
     for name in list_machines():
         m = load_machine(name)
@@ -178,6 +186,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--batches", nargs="+", type=int, default=[64, 128, 256, 512, 1024])
     p.add_argument("--steps", type=int, default=10)
     p.set_defaults(func=cmd_profile)
+
+    p = sub.add_parser("netcheck", help="đo độ trễ và thông lượng giữa các máy của một thí nghiệm")
+    p.add_argument("--machine", "-m", required=True)
+    experiment_args(p)
+    p.set_defaults(func=cmd_netcheck)
 
     p = sub.add_parser("machines", help="liệt kê các máy đã cấu hình")
     p.set_defaults(func=cmd_machines)

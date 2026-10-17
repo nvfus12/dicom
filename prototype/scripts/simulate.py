@@ -23,15 +23,17 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--experiment", "-e", required=True)
     parser.add_argument("--set", action="append", default=[])
+    parser.add_argument("--command", choices=("run", "netcheck"), default="run")
     args = parser.parse_args()
 
     spec = load_experiment(args.experiment, parse_overrides(args.set))
     run_id = f"{spec.name}-{spec.mode}-{time.strftime('%Y%m%d-%H%M%S')}"
     sets = [x for s in args.set for x in ("--set", s)]
+    extra = ["--run-id", run_id] if args.command == "run" else []
     procs = []
     for name in spec.workers:
-        cmd = [sys.executable, "-m", "gpubench", "run", "--machine", name,
-               "--experiment", args.experiment, "--run-id", run_id, *sets]
+        cmd = [sys.executable, "-m", "gpubench", args.command, "--machine", name,
+               "--experiment", args.experiment, *extra, *sets]
         procs.append((name, subprocess.Popen(cmd, cwd=PROJECT_DIR)))
     codes = {name: p.wait() for name, p in procs}
     print(f"run_id={run_id} exit codes: {codes}")

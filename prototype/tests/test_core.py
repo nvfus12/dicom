@@ -20,6 +20,7 @@ from gpubench.adapters.device import CpuDevice  # noqa: E402
 from gpubench.adapters.models import tiny_cnn  # noqa: E402
 from gpubench.app.config_loader import load_experiment, load_machine, list_machines  # noqa: E402
 from gpubench.domain.config import ConfigError, ExperimentSpec  # noqa: E402
+from gpubench.app.netcheck import parse_tailscale_ping  # noqa: E402
 from gpubench.domain.sync import build_strategy  # noqa: E402
 
 WORLD = 3
@@ -112,6 +113,22 @@ class ConfigTest(unittest.TestCase):
         lsgd = ExperimentSpec(name="x", mode="localsgd", workers=("a", "b", "c"), lr=0.1)
         self.assertAlmostEqual(ddp.effective_lr(), 0.3)
         self.assertAlmostEqual(lsgd.effective_lr(), 0.1)
+
+
+class TailscalePingParseTest(unittest.TestCase):
+    def test_relayed_then_direct_counts_as_direct(self):
+        text = ("pong from a (100.64.0.1) via DERP(sin) in 180ms\n"
+                "pong from a (100.64.0.1) via 203.0.113.5:41641 in 30ms")
+        r = parse_tailscale_ping(text)
+        self.assertFalse(r["relayed"])
+        self.assertEqual(r["via"], "203.0.113.5:41641")
+
+    def test_relayed_only(self):
+        r = parse_tailscale_ping("pong from a (100.64.0.1) via DERP(sin) in 180ms")
+        self.assertTrue(r["relayed"])
+
+    def test_unparseable_output_is_unknown(self):
+        self.assertIsNone(parse_tailscale_ping("no matching peer")["relayed"])
 
 
 if __name__ == "__main__":

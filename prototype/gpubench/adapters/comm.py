@@ -75,6 +75,18 @@ class GlooComm:
         dist.broadcast_object_list(box, src=src)
         return box[0]
 
+    # Point-to-point and gather helpers: used by the network check, not by training.
+    def send(self, tensor: torch.Tensor, dst: int) -> None:
+        dist.send(tensor, dst=dst)
+
+    def recv(self, tensor: torch.Tensor, src: int) -> None:
+        dist.recv(tensor, src=src)
+
+    def all_gather_object(self, obj: Any) -> list[Any]:
+        out: list[Any] = [None] * self.world_size
+        dist.all_gather_object(out, obj)
+        return out
+
     def any_true(self, flag: bool) -> bool:
         t = torch.tensor([1 if flag else 0], dtype=torch.int32)
         dist.all_reduce(t, op=dist.ReduceOp.MAX)
