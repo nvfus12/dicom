@@ -1,0 +1,20 @@
+# Buổi chạy chính, lần 2: DDP trên cả 3 máy. Rank 0 = doan-tuan.
+# Nếu DDP lỗi với CUDA trên Windows: chạy lại y hệt, thêm --set mode=sync trên CẢ 3 máy.
+mode: ddp
+workers: [doan-tuan, nguyen-duc, trinh-duc]
+model: resnet20
+dataset: cifar10
+batch_size: 128         # mỗi máy; global batch 384
+lr: 0.1                 # nhân tuyến tính theo số máy -> 0.3
+lr_scaling: linear
+warmup_epochs: 2
+max_epochs: 30
+max_train_minutes: 30
+target_acc: null
+eval_every_epochs: 1
+log_every_steps: 50
+amp: false
+comm_dtype: fp32
+seed: 0
+master_port: 29500
+timeout_s: 900          # các máy chờ nhau tối đa 15 phút lúc khởi động

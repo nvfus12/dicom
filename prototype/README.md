@@ -7,8 +7,9 @@ Benchmark code that compares single GPU, DDP and local SGD by **time to reach a 
 | Item | Status |
 |---|---|
 | 3 simulated CPU workers over gloo (TCP on localhost), all 4 modes: single / ddp / sync / localsgd | Runs end to end, PyTorch 2.6.0 |
-| Synchronisation tests (`tests/`): models stay identical; `avg` equals the exact mean of the workers; DiLoCo outer step equals `torch.optim.SGD(nesterov=True)`; fp16/bf16 transfer | 19/19 pass, PyTorch 2.6.0 |
+| Synchronisation tests (`tests/`): models stay identical; `avg` equals the exact mean of the workers; DiLoCo outer step equals `torch.optim.SGD(nesterov=True)`; fp16/bf16 transfer | 23/23 pass, PyTorch 2.6.0 |
 | DDP with the bf16 compression hook | **Not tested** (fp16 hook is tested) |
+| `GLOO_SOCKET_IFNAME` (`network_interface`) on Windows | Works with a real adapter name; a wrong name fails with `Unable to find address for: <name>` |
 | Machines with mismatched configs → all stop together with a clear error, no hang | Tried |
 | `netcheck` between 3 simulated workers on localhost | Runs; parsing of `tailscale ping` output is unit-tested, but the real `tailscale` CLI was never run |
 | Running over a VPN/internet | **Not yet** |
@@ -40,7 +41,7 @@ configs/
   experiments/ one file per experiment
 ```
 
-**A machine is a configuration file, not a class.** Everything that differs between machines (IP, which GPU, AMP on/off, maximum batch size, data directory, network adapter, environment variables) is data in `configs/machines/<name>.yaml`. The code only has adapters for each *kind of infrastructure* (CUDA/CPU, gloo/single worker, CIFAR/synthetic). Adding a 4th or 10th machine means adding one YAML file and listing its name under `workers` in an experiment; no code changes.
+**A machine is a configuration file, not a class.** Everything that differs between machines (IP, which GPU, maximum batch size, data directory, network adapter, environment variables) is data in `configs/machines/<name>.yaml`. The code only has adapters for each *kind of infrastructure* (CUDA/CPU, gloo/single worker, CIFAR/synthetic). Adding a 4th or 10th machine means adding one YAML file and listing its name under `workers` in an experiment; no code changes.
 
 A new adapter is only needed for a new *kind* of infrastructure, for example AMD GPUs (ROCm), Linux with NCCL, or another dataset.
 
@@ -72,7 +73,8 @@ Do this on **each worker machine** (copy the whole `prototype/` folder over):
    ```bash
    python -m gpubench profile -m <machine>
    ```
-5. Fill in `address` (IPv4 on the network used for the run) in the machine file. On the rank 0 machine, open the inbound TCP port `master_port` (default 29500) in Windows Defender Firewall, or switch the network profile to Private.
+5. Fill in `address` (IPv4 on the network used for the run) in the machine file. **Every** machine must accept inbound TCP from the other workers: gloo opens connections between every pair, on random ports, not only to rank 0's `master_port`. Allow inbound TCP from the VPN range only (see below), or switch the network profile to Private on a trusted network.
+   Alternatively pass `--master-addr <rank 0 IP>` to `run`/`netcheck`; then each machine only needs its own machine file.
 6. Download CIFAR-10 once beforehand so it is not counted in run time (running E1 on each machine downloads it automatically).
 
 When done, **copy the same `configs/` folder to every machine**: each machine must read the others' files to find rank 0.
@@ -85,7 +87,7 @@ Use a mesh VPN such as Tailscale, ZeroTier or WireGuard. Each machine gets a vir
 
 1. Every owner installs the VPN client and joins the same virtual network (each owner does this themselves).
 2. In each machine file set `address` to the **VPN IP**, and `network_interface` to the VPN adapter name (for Tailscale on Windows this is normally `Tailscale`; check the adapter list on the machine). Without it, gloo may advertise a different adapter's address to the peers. This has not been tested on real machines.
-3. In Windows Defender Firewall allow `master_port` only from the VPN network.
+3. In Windows Defender Firewall allow inbound TCP **only from the VPN range** on every worker (Tailscale uses 100.64.0.0/10), for example in an administrator PowerShell: `New-NetFirewallRule -DisplayName gpubench-vpn -Direction Inbound -Protocol TCP -RemoteAddress 100.64.0.0/10 -Action Allow`, and remove it afterwards with `Remove-NetFirewallRule -DisplayName gpubench-vpn`.
 4. Measure the link with the same transport training will use:
    ```bash
    python -m gpubench netcheck -m <machine> -e e3_localsgd_x3
@@ -106,6 +108,9 @@ python -m gpubench plan -e e3_localsgd_x3 --set local_steps=16
 
 | Experiment | Command (on each machine, replace `<machine>`) |
 |---|---|
+| Minimal benchmark, run 1: one GPU | `python -m gpubench run -m <machine> -e run1_single` |
+| Minimal benchmark, run 2: DDP on 3 machines | `python -m gpubench run -m <machine> -e run2_ddp_x3 --master-addr <rank 0 IP>` |
+| Minimal benchmark, run 3: local SGD H=256 | `python -m gpubench run -m <machine> -e run3_localsgd_x3 --master-addr <rank 0 IP>` |
 | E1 baseline | `python -m gpubench run -m <machine> -e e1_single` (add `--set model=resnet18`) |
 | E2 DDP, 2 identical GPUs | `python -m gpubench run -m <machine> -e e2_ddp_t1000x2` |
 | E2 DDP, 3 machines | `python -m gpubench run -m <machine> -e e2_ddp_x3` |
@@ -151,5 +156,8 @@ On Windows this needs a PyTorch version other than 2.10 (see the version warning
   - `outer_optimizer: nesterov`: SGD with Nesterov momentum on the pseudo-gradient, as in DiLoCo (Douillard et al., 2023). With `outer_lr: 1` and `outer_momentum: 0` it equals `avg`. DiLoCo used lr 0.7 and momentum 0.9 for language models; for ResNet-20 on CIFAR, Lin et al. (ICLR 2020) report that high global momentum can hurt accuracy, so sweep it.
   - BatchNorm statistics are always plainly averaged; inner optimizer momentum stays local. The inner learning rate is not scaled by the number of workers.
   - `sync_rounds` in `train_end` counts outer synchronisations.
+- `amp` (mixed precision) is an **experiment** setting, identical on all workers: with `ddp`/`sync` a worker using AMP sends loss-scaled gradients, so mixing AMP and non-AMP workers would silently corrupt the average. Machine files no longer have an `amp` key.
+- Local SGD evaluates the **global model** (the state after the last outer step), as DiLoCo does; evaluation never forces an extra synchronisation, so H keeps its meaning even when an epoch is shorter than H. Before the first synchronisation the evaluated model is the initial one.
+- Time to reach any accuracy level can be computed after the run: `python analyze/analyze.py --acc 0.6 0.7 0.8`.
 - `comm_dtype` (`fp32` / `fp16` / `bf16`) only changes what crosses the network; all model arithmetic stays fp32. In `localsgd` only the pseudo-gradient is rounded, never the weights. In `sync`, gradients are sent after AMP loss scaling, so fp16 may overflow and make the GradScaler skip steps; prefer `bf16` there when AMP is on. In `ddp` it uses PyTorch's DDP compression hooks.
 - DDP/sync: the learning rate is scaled linearly with the number of workers (`lr_scaling: linear`), with warmup.

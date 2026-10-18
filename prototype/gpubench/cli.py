@@ -14,7 +14,7 @@ def cmd_run(args) -> int:
     from .app.bootstrap import run
 
     spec = load_experiment(args.experiment, parse_overrides(args.set), runner=args.machine)
-    run(args.machine, spec, run_id=args.run_id)
+    run(args.machine, spec, run_id=args.run_id, master_addr=args.master_addr)
     return 0
 
 
@@ -92,7 +92,7 @@ def cmd_profile(args) -> int:
     from .adapters.models import build_model
 
     m = load_machine(args.machine)
-    device = build_device(m)
+    device = build_device(m, args.amp)
     print(f"Máy {m.name}: {device.describe()}")
     suggestion = {}
     for model_name in args.models:
@@ -139,7 +139,7 @@ def cmd_netcheck(args) -> int:
     from .app.netcheck import run_netcheck
 
     spec = load_experiment(args.experiment, parse_overrides(args.set))
-    run_netcheck(args.machine, spec)
+    run_netcheck(args.machine, spec, master_addr=args.master_addr)
     return 0
 
 
@@ -169,6 +169,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--machine", "-m", required=True, help=f"tên file trong {CONFIGS_DIR / 'machines'}")
     experiment_args(p)
     p.add_argument("--run-id", default=None, help="mặc định: <tên thí nghiệm>-<thời gian> do rank 0 đặt")
+    p.add_argument("--master-addr", default=None,
+                   help="IP của máy rank 0; nếu có thì không cần file máy của rank 0")
     p.set_defaults(func=cmd_run)
 
     p = sub.add_parser("plan", help="xem rank, địa chỉ và lệnh cho từng máy")
@@ -185,11 +187,13 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--models", nargs="+", default=["resnet20", "resnet18"])
     p.add_argument("--batches", nargs="+", type=int, default=[64, 128, 256, 512, 1024])
     p.add_argument("--steps", type=int, default=10)
+    p.add_argument("--amp", action="store_true", help="đo với mixed precision")
     p.set_defaults(func=cmd_profile)
 
     p = sub.add_parser("netcheck", help="đo độ trễ và thông lượng giữa các máy của một thí nghiệm")
     p.add_argument("--machine", "-m", required=True)
     experiment_args(p)
+    p.add_argument("--master-addr", default=None, help="IP của máy rank 0")
     p.set_defaults(func=cmd_netcheck)
 
     p = sub.add_parser("machines", help="liệt kê các máy đã cấu hình")

@@ -130,18 +130,13 @@ class Trainer:
                     self.sink.emit("step", step=step, epoch=epoch, lr=lr, train_time_s=train_time,
                                    **window.flush(), gpu=self.monitor.sample())
 
-            t0 = self.clock()
-            self.strategy.end_of_epoch(model)
-            comm_s, comm_bytes = self.strategy.pop_stats()
-            train_time += self.clock() - t0
-            window.add_comm(comm_s, comm_bytes)
-
             epochs_done = epoch + 1
             reached = False
             if epochs_done % spec.eval_every_epochs == 0 or epochs_done == spec.max_epochs:
                 if is_root:
                     t_eval = self.clock()
-                    acc, test_loss = evaluate(self.strategy.unwrap(model), test_loader, device)
+                    with self.strategy.eval_model(model) as eval_model:
+                        acc, test_loss = evaluate(eval_model, test_loader, device)
                     best_acc = acc if best_acc is None else max(best_acc, acc)
                     reached = spec.target_acc is not None and acc >= spec.target_acc
                     if reached and time_to_target is None:

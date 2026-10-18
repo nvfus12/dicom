@@ -106,7 +106,8 @@ def parse_tailscale_ping(text: str) -> dict:
             "via": via[-1] if via else None, "raw": text[-300:]}
 
 
-def run_netcheck(machine_name: str, spec: ExperimentSpec, configs_dir: Path = CONFIGS_DIR,
+def run_netcheck(machine_name: str, spec: ExperimentSpec, master_addr: str | None = None,
+                 configs_dir: Path = CONFIGS_DIR,
                  results_dir: Path = RESULTS_DIR) -> dict:
     if spec.world_size < 2:
         raise ConfigError("netcheck cần thí nghiệm có ít nhất 2 workers")
@@ -115,7 +116,7 @@ def run_netcheck(machine_name: str, spec: ExperimentSpec, configs_dir: Path = CO
         raise ConfigError(f"Máy '{machine.name}' không có trong workers {list(spec.workers)}")
     rank = spec.workers.index(machine.name)
     apply_environment(machine)
-    master = rendezvous_address(spec, configs_dir)
+    master = rendezvous_address(spec, configs_dir, master_addr)
     print(f"[{machine.name}] rank {rank}/{spec.world_size}, chờ các máy khác tại "
           f"{master}:{spec.master_port} ...", flush=True)
     comm = GlooComm(master, spec.master_port, rank, spec.world_size, spec.timeout_s)
@@ -127,7 +128,10 @@ def run_netcheck(machine_name: str, spec: ExperimentSpec, configs_dir: Path = CO
         peers = {}
         for other_rank, name in enumerate(spec.workers):
             if other_rank != rank:
-                address = load_machine(name, configs_dir).address
+                try:
+                    address = load_machine(name, configs_dir).address
+                except ConfigError:     # peer's file not copied to this machine
+                    address = None
                 peers[name] = tailscale_path(address) if address else {"available": False}
         sink.emit("tailscale", machine=machine.name, peers=peers)
 

@@ -15,6 +15,7 @@ all arithmetic on the model stays in fp32.
 from __future__ import annotations
 
 import time
+from contextlib import contextmanager
 
 import torch
 from torch import nn
@@ -61,8 +62,10 @@ class SyncStrategy:
     def after_step(self, model: nn.Module, step: int) -> None:
         pass
 
-    def end_of_epoch(self, model: nn.Module) -> None:
-        pass
+    @contextmanager
+    def eval_model(self, model: nn.Module):
+        """The model to evaluate. Called on rank 0 only, so it must not communicate."""
+        yield self.unwrap(model)
 
     def pop_stats(self) -> tuple[float, int]:
         stats = (self.comm_s, self.comm_bytes)
@@ -145,8 +148,6 @@ class LocalSGDStrategy(SyncStrategy):
         self.outer_lr = outer_lr if outer_optimizer == "nesterov" else 1.0
         self.outer_momentum = outer_momentum if outer_optimizer == "nesterov" else 0.0
         self.rounds = 0
-        self._step = 0
-        self._last_sync_step = 0
 
     def prepare(self, model: nn.Module) -> nn.Module:
         self._broadcast_model(model)
@@ -159,16 +160,23 @@ class LocalSGDStrategy(SyncStrategy):
         return model
 
     def after_step(self, model: nn.Module, step: int) -> None:
-        self._step = step
         if step % self.local_steps == 0:
             self._sync()
-            self._last_sync_step = step
 
-    def end_of_epoch(self, model: nn.Module) -> None:
-        # Evaluation needs one consistent model; sync unless the last step just did.
-        if self._step != self._last_sync_step:
-            self._sync()
-            self._last_sync_step = self._step
+    @contextmanager
+    def eval_model(self, model: nn.Module):
+        """Evaluates the global model (state after the last outer step), as DiLoCo does.
+
+        No extra synchronisation, so H keeps its meaning even when evaluation is
+        more frequent than synchronisation. The worker's local weights are restored.
+        """
+        tensors = self._params + self._buffers
+        local = _flatten(tensors).clone()
+        _unflatten_into(self._global, tensors)
+        try:
+            yield model
+        finally:
+            _unflatten_into(local, tensors)
 
     @torch.no_grad()
     def _sync(self) -> None:

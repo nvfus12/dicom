@@ -25,7 +25,6 @@ class MachineProfile:
     address: str | None = None          # IPv4 reachable by the other workers
     device: str = "cuda"
     cuda_index: int = 0
-    amp: bool = False                   # mixed precision, only used on cuda
     num_workers: int = 2                # DataLoader worker processes
     data_dir: str = "./data"
     download: bool = True               # allow dataset download into data_dir
@@ -69,6 +68,9 @@ class ExperimentSpec:
     outer_lr: float = 1.0
     outer_momentum: float = 0.0
     comm_dtype: str = "fp32"            # what goes over the network: fp32 | fp16 | bf16
+    # Mixed precision. Experiment-level on purpose: with ddp/sync, a worker using AMP
+    # sends loss-scaled gradients, so mixing AMP and non-AMP workers corrupts the average.
+    amp: bool = False
     seed: int = 0
     master_port: int = 29500
     timeout_s: int = 600

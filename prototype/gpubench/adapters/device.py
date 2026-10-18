@@ -55,7 +55,9 @@ class CpuDevice:
         return {"type": "cpu", "threads": torch.get_num_threads(), "amp": False}
 
 
-def build_device(machine: MachineProfile):
+def build_device(machine: MachineProfile, amp: bool = False):
     if machine.device == "cuda":
-        return CudaDevice(machine.cuda_index, machine.amp)
+        return CudaDevice(machine.cuda_index, amp)
+    if amp:
+        raise ValueError(f"Máy '{machine.name}' chạy CPU nên không dùng được amp=true")
     return CpuDevice()

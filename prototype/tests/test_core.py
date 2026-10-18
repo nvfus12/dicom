@@ -123,6 +123,24 @@ class SyncStrategyTest(unittest.TestCase):
                 self.assertLess(max(out["mean_err"]), 1e-3)
 
 
+class LocalSGDEvalModelTest(unittest.TestCase):
+    def test_eval_uses_global_model_and_restores_local_weights(self):
+        from gpubench.adapters.comm import LocalComm
+
+        torch.manual_seed(0)
+        model = tiny_cnn()
+        strategy = build_strategy("localsgd", LocalComm(), CpuDevice(), local_steps=100)
+        strategy.prepare(model)
+        initial = _flat_params(model).clone()
+        with torch.no_grad():
+            for p in model.parameters():
+                p.add_(1.0)                     # local training, no sync yet
+        local = _flat_params(model).clone()
+        with strategy.eval_model(model) as m:
+            self.assertTrue(torch.equal(_flat_params(m), initial))
+        self.assertTrue(torch.equal(_flat_params(model), local))
+
+
 class OuterUpdateTest(unittest.TestCase):
     def test_matches_torch_sgd_nesterov(self):
         # The outer step is SGD-Nesterov with the pseudo-gradient as gradient.
@@ -145,9 +163,26 @@ class ConfigTest(unittest.TestCase):
     def test_all_shipped_configs_load(self):
         for name in list_machines():
             load_machine(name)
-        for ref in ("e2_ddp_t1000x2", "e2_ddp_x3", "e3_localsgd_x3", "smoke_dist"):
+        for ref in ("e2_ddp_t1000x2", "e2_ddp_x3", "e3_localsgd_x3", "smoke_dist",
+                    "run2_ddp_x3", "run3_localsgd_x3"):
             load_experiment(ref)
         load_experiment("e1_single", runner="doan-tuan")
+        load_experiment("run1_single", runner="doan-tuan")
+
+    def test_amp_is_part_of_the_experiment_fingerprint(self):
+        a = load_experiment("run2_ddp_x3")
+        b = load_experiment("run2_ddp_x3", {"amp": True})
+        self.assertNotEqual(a.fingerprint(), b.fingerprint())
+
+    def test_machine_files_no_longer_accept_amp(self):
+        from gpubench.domain.config import MachineProfile
+        with self.assertRaises(TypeError):
+            MachineProfile(name="x", amp=True)
+
+    def test_master_addr_override_skips_rank0_file(self):
+        from gpubench.app.bootstrap import rendezvous_address
+        spec = ExperimentSpec(name="x", mode="ddp", workers=("no-such-machine", "b"))
+        self.assertEqual(rendezvous_address(spec, Path("."), "100.64.0.7"), "100.64.0.7")
 
     def test_unknown_key_is_rejected(self):
         with self.assertRaises(ConfigError):

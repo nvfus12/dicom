@@ -24,7 +24,11 @@ from ..domain.trainer import Trainer, TrainResult
 from .config_loader import CONFIGS_DIR, RESULTS_DIR, load_machine
 
 
-def rendezvous_address(spec: ExperimentSpec, configs_dir: Path) -> str:
+def rendezvous_address(spec: ExperimentSpec, configs_dir: Path,
+                       override: str | None = None) -> str:
+    """Address of rank 0: from --master-addr if given, else from its machine file."""
+    if override:
+        return override
     root = load_machine(spec.workers[0], configs_dir)
     if not root.address:
         raise ConfigError(f"Máy rank 0 '{root.name}' chưa có address trong "
@@ -40,6 +44,7 @@ def apply_environment(machine: MachineProfile) -> None:
 
 
 def run(machine_name: str, spec: ExperimentSpec, run_id: str | None = None,
+        master_addr: str | None = None,
         configs_dir: Path = CONFIGS_DIR, results_dir: Path = RESULTS_DIR,
         echo: bool = True) -> TrainResult:
     machine = load_machine(machine_name, configs_dir)
@@ -52,7 +57,7 @@ def run(machine_name: str, spec: ExperimentSpec, run_id: str | None = None,
     if spec.world_size == 1:
         comm = LocalComm()
     else:
-        master = rendezvous_address(spec, configs_dir)
+        master = rendezvous_address(spec, configs_dir, master_addr)
         print(f"[{machine.name}] rank {rank}/{spec.world_size}, chờ các máy khác tại "
               f"{master}:{spec.master_port} ...", flush=True)
         comm = GlooComm(master, spec.master_port, rank, spec.world_size, spec.timeout_s)
@@ -67,7 +72,7 @@ def run(machine_name: str, spec: ExperimentSpec, run_id: str | None = None,
         # Local setup can fail on one machine; decide together so nobody hangs.
         error = None
         try:
-            device = build_device(machine)
+            device = build_device(machine, spec.amp)
             limit = machine.max_batch.get(spec.model)
             if limit is not None and spec.batch_size > limit:
                 raise ConfigError(f"batch_size={spec.batch_size} vượt max_batch[{spec.model}]={limit} "

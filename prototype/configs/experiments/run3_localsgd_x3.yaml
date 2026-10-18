@@ -1,0 +1,20 @@
+# Buổi chạy chính, lần 3: local SGD trên 3 máy, đồng bộ mỗi 256 bước, trung bình đơn giản.
+mode: localsgd
+workers: [doan-tuan, nguyen-duc, trinh-duc]
+local_steps: 256
+outer_optimizer: avg
+model: resnet20
+dataset: cifar10
+batch_size: 128
+lr: 0.1
+warmup_epochs: 1
+max_epochs: 30
+max_train_minutes: 30
+target_acc: null
+eval_every_epochs: 1
+log_every_steps: 50
+amp: false
+comm_dtype: fp32
+seed: 0
+master_port: 29500
+timeout_s: 900

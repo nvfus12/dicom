@@ -1,0 +1,15 @@
+# Buổi chạy chính, lần 1: baseline 1 GPU. Chạy trên máy nào thì máy đó là worker duy nhất.
+# Cả 3 máy có thể chạy cùng lúc, mỗi máy độc lập (không cần mạng).
+mode: single
+model: resnet20
+dataset: cifar10
+batch_size: 128
+lr: 0.1
+warmup_epochs: 1
+max_epochs: 30
+max_train_minutes: 30   # dừng chắc chắn sau 30 phút huấn luyện
+target_acc: null        # không dừng sớm; thời gian đạt từng mức accuracy tính sau bằng analyze.py --acc
+eval_every_epochs: 1
+log_every_steps: 50
+amp: false
+seed: 0
