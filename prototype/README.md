@@ -125,13 +125,28 @@ After running E1, set the same `target_acc` in every experiment file.
 
 ### Analysis
 
-Collect the `results/` folder from the rank 0 machine of each run into one place, then:
+Collect the `results/` folder of **every** machine into one place (each run is a subfolder; the folders of one distributed run hold one file per rank and merge cleanly), then:
 
 ```bash
-python analyze/analyze.py
+python analyze/analyze.py --acc 0.6 0.7 0.8 --at-minutes 10 30
 ```
 
-Output: `results/summary.csv` and `results/accuracy_vs_time.png`.
+It reads every rank's log and the `netcheck-*` folders, and writes to `results/report/`:
+
+| File | Content |
+|---|---|
+| `runs.csv`, `table_runs.tex` | One row per run: time to each accuracy level, speed-up against the baseline (default: the fastest single-GPU run, or `--baseline <part of run id>`), accuracy at given minutes, group throughput, scaling efficiency, estimated synchronisation overhead per step, sync rounds, data sent |
+| `ranks.csv`, `table_ranks.tex` | One row per machine and run: per-step data / compute / communication time, VRAM peak, max GPU temperature, min SM clock |
+| `network.csv`, `table_network.tex` | Netcheck: RTT and throughput per pair, direct or relayed, all-reduce time per size |
+| `accuracy_vs_time.png`, `accuracy_vs_epoch.png` | Wall-clock view and statistical-efficiency view |
+| `time_breakdown.png`, `gpu_thermal.png` | Per-step time split per machine; temperature and clock over time (needs NVML) |
+
+How the comparisons are computed:
+
+- **Scaling efficiency** = group throughput / sum of the single-GPU throughputs of the same machines. Valid only if those single runs ran on otherwise idle machines; in the CPU simulation they share one CPU, so values above 1 can appear.
+- **Synchronisation overhead per step** = step time of the distributed run − step time of the slowest machine alone (same batch). An indirect estimate, needed because DDP does not report communication separately.
+- **DDP data sent** is estimated as steps × parameters × 4 bytes; `sync` and `localsgd` report it directly.
+- Single-GPU runs started at the same moment on several machines no longer collide: the default run id contains rank 0's machine name.
 
 ## Trying it without a GPU
 

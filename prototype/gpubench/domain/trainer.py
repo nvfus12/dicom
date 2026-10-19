@@ -85,7 +85,9 @@ class Trainer:
         criterion = nn.CrossEntropyLoss()
 
         self.sink.emit("train_start", steps_per_epoch=steps_per_epoch, total_steps=total_steps,
-                       base_lr=base_lr, warmup_steps=warmup_steps)
+                       base_lr=base_lr, warmup_steps=warmup_steps,
+                       model_params=sum(p.numel() for p in self.model.parameters()),
+                       batch_size=spec.batch_size)
         device.reset_peak_memory()
         model.train()
 

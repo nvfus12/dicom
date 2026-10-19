@@ -85,7 +85,10 @@ def run(machine_name: str, spec: ExperimentSpec, run_id: str | None = None,
                 raise error
             raise ConfigError("Một máy khác báo lỗi khi khởi tạo; xem thông báo trên máy đó.")
 
-        run_id = comm.broadcast_object(run_id or f"{spec.name}-{time.strftime('%Y%m%d-%H%M%S')}")
+        # Rank 0's machine name keeps ids unique when several machines start a
+        # single-GPU run in the same second and their results are merged later.
+        run_id = comm.broadcast_object(
+            run_id or f"{spec.name}-{spec.workers[0]}-{time.strftime('%Y%m%d-%H%M%S')}")
         sink = JsonlSink(results_dir / run_id / f"rank{rank}-{machine.name}.jsonl",
                          echo=echo and rank == 0)
         try:
