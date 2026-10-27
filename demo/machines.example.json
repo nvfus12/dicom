@@ -1,0 +1,9 @@
+{
+  "controller_name": "Máy điều phối",
+  "token": "dicom-demo",
+  "machines": [
+    { "name": "may-a", "address": "127.0.0.1", "port": 8765 },
+    { "name": "may-b", "address": "127.0.0.1", "port": 8766 },
+    { "name": "may-c", "address": "127.0.0.1", "port": 8767 }
+  ]
+}

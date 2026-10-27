@@ -50,3 +50,7 @@ main.tex
 
 # Internal research notes
 research/
+
+# Demo: cau hinh may that (co IP) va nhat ky cuc bo
+demo/machines.json
+demo/agent-log.jsonl

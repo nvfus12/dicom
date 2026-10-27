@@ -15,6 +15,7 @@ The first benchmark round assumes stable conditions: no machine is reclaimed mid
 | Path | Content |
 |---|---|
 | `prototype/` | The benchmark harness `gpubench` (Python/PyTorch). See [prototype/README.md](prototype/README.md). |
+| `demo/` | A small demo of the permission step: a controller GUI asks a worker machine for resources, and the machine's owner approves or refuses in a dialog. Standard library only. See [demo/README.md](demo/README.md). |
 
 ## The prototype in short
 
