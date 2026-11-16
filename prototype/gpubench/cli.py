@@ -153,6 +153,17 @@ def cmd_machines(args) -> int:
     return 0
 
 
+def cmd_agent(args) -> int:
+    from .control.agent_core import AgentCore
+    from .control.agent_ui import AgentWindow
+
+    machine = load_machine(args.machine)
+    print(f"Agent {machine.name}: máy điều phối gọi tới {machine.address or '?'}:{args.port}")
+    AgentWindow(lambda approver: AgentCore(machine.name, approver),
+                args.host, args.port, args.token).run()
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     # Windows consoles default to a legacy code page that cannot print Vietnamese.
     for stream in (sys.stdout, sys.stderr):
@@ -198,6 +209,13 @@ def main(argv: list[str] | None = None) -> int:
     experiment_args(p)
     p.add_argument("--master-addr", default=None, help="IP của máy rank 0")
     p.set_defaults(func=cmd_netcheck)
+
+    p = sub.add_parser("agent", help="chạy agent LAB trên worker (cửa sổ xin phép, nhận lượt chạy)")
+    p.add_argument("--machine", "-m", required=True, help="tên file máy của chính máy này")
+    p.add_argument("--host", default="0.0.0.0")
+    p.add_argument("--port", type=int, default=8765)
+    p.add_argument("--token", default="lab-dicom", help="phải giống token trong configs/lab.yaml")
+    p.set_defaults(func=cmd_agent)
 
     p = sub.add_parser("machines", help="liệt kê các máy đã cấu hình")
     p.set_defaults(func=cmd_machines)
