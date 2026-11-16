@@ -74,6 +74,18 @@ How it behaves when things go wrong:
 
 Verified on CPU with two simulated workers on localhost: the full flow with real windows and real `gpubench run` for local SGD and DDP, an owner stopping mid-run, and a controller reopened mid-run. **Not yet verified on real GPUs or across real machines.**
 
+### Offline install for workers
+
+Workers can be set up without Internet access. On the coordinator, once, with a fast connection:
+
+```bash
+powershell -ExecutionPolicy Bypass -File tools\offline\prepare_offline.ps1
+```
+
+This builds `D:\lab-offline` (about 3 GB): a Python 3.13 installer, PyTorch 2.6.0 CUDA 12.4 wheels with all dependencies, CIFAR-10, the code and `setup_worker.ps1`. Share it with `py -3.13 -m http.server 8000 --directory D:\lab-offline` (or copy it to a USB drive), then run `setup_worker.ps1 -Source <URL or folder> -Machine <name>` on each worker. It installs Python if missing, creates `.venv` from the local wheels, copies CIFAR-10 and prints a pass/fail table. The NVIDIA driver must already be installed.
+
+Tested on the coordinator with a small bundle (no PyTorch, no GPU) over HTTP and from a folder. The full CUDA bundle has not been downloaded or installed yet.
+
 ## Workflow with real machines
 
 Do this on **each worker machine** (copy the whole `prototype/` folder over):
