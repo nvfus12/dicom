@@ -164,6 +164,19 @@ def cmd_agent(args) -> int:
     return 0
 
 
+def cmd_controller(args) -> int:
+    from .control.controller_ui import ControllerWindow
+    from .control.protocol import ProtocolError
+
+    try:
+        window = ControllerWindow(Path(args.lab))
+    except ProtocolError as e:
+        print(f"Lỗi cấu hình: {e}", file=sys.stderr)
+        return 2
+    window.run()
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     # Windows consoles default to a legacy code page that cannot print Vietnamese.
     for stream in (sys.stdout, sys.stderr):
@@ -216,6 +229,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--port", type=int, default=8765)
     p.add_argument("--token", default="lab-dicom", help="phải giống token trong configs/lab.yaml")
     p.set_defaults(func=cmd_agent)
+
+    p = sub.add_parser("controller", help="mở giao diện điều khiển LAB trên máy điều phối")
+    p.add_argument("--lab", default=str(CONFIGS_DIR / "lab.yaml"), help="danh sách agent và token")
+    p.set_defaults(func=cmd_controller)
 
     p = sub.add_parser("machines", help="liệt kê các máy đã cấu hình")
     p.set_defaults(func=cmd_machines)
