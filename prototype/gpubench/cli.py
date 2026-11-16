@@ -4,9 +4,10 @@ from __future__ import annotations
 import argparse
 import platform
 import sys
+from pathlib import Path
 
-from .app.config_loader import (CONFIGS_DIR, list_machines, load_experiment, load_machine,
-                                parse_overrides)
+from .app.config_loader import (CONFIGS_DIR, RESULTS_DIR, list_machines, load_experiment,
+                                load_machine, parse_overrides)
 from .domain.config import ConfigError
 
 
@@ -14,7 +15,8 @@ def cmd_run(args) -> int:
     from .app.bootstrap import run
 
     spec = load_experiment(args.experiment, parse_overrides(args.set), runner=args.machine)
-    run(args.machine, spec, run_id=args.run_id, master_addr=args.master_addr)
+    extra = {"results_dir": Path(args.results_dir)} if args.results_dir else {}
+    run(args.machine, spec, run_id=args.run_id, master_addr=args.master_addr, **extra)
     return 0
 
 
@@ -171,6 +173,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--run-id", default=None, help="mặc định: <tên thí nghiệm>-<thời gian> do rank 0 đặt")
     p.add_argument("--master-addr", default=None,
                    help="IP của máy rank 0; nếu có thì không cần file máy của rank 0")
+    p.add_argument("--results-dir", default=None, help=f"mặc định: {RESULTS_DIR}")
     p.set_defaults(func=cmd_run)
 
     p = sub.add_parser("plan", help="xem rank, địa chỉ và lệnh cho từng máy")

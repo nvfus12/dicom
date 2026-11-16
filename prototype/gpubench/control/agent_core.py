@@ -220,7 +220,8 @@ class AgentCore:
             experiment.write_text(yaml.safe_dump(build_experiment(params, workers, run_id),
                                                  allow_unicode=True, sort_keys=True), encoding="utf-8")
             argv = [sys.executable, "-m", "gpubench", "run", "-m", self.name, "-e", str(experiment),
-                    "--run-id", run_id, "--master-addr", master_addr]
+                    "--run-id", run_id, "--master-addr", master_addr,
+                    "--results-dir", str(self._results_dir)]
             self._process = self._launcher(argv, self._project_dir, self._log_path(run_id))
             self._state = "RUNNING"
         return self.status(run_id)

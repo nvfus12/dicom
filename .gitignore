@@ -57,3 +57,5 @@ demo/agent-log.jsonl
 
 # Lab control: per-run experiment files and quick-run results (hold machine names and IPs)
 prototype/configs/experiments/_runs/
+prototype/configs/lab.yaml
+prototype/results-thu/

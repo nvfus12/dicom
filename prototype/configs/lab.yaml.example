@@ -1,0 +1,10 @@
+# Danh sách agent cho giao diện điều khiển LAB.
+# Chép thành configs/lab.yaml (file đó bị git bỏ qua vì chứa IP) và sửa địa chỉ cho đúng mạng.
+# Mỗi worker chạy: python -m gpubench agent -m <name>
+token: lab-dicom          # phải giống --token của các agent
+agents:
+  - name: doan-tuan
+    address: 192.168.0.103
+  - name: trinh-duc
+    address: 192.168.0.102
+    # port: 8765          # mặc định

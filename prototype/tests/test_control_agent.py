@@ -123,6 +123,7 @@ class AgentCoreTest(unittest.TestCase):
         self.assertTrue(experiment.is_file())
         self.assertEqual(argv[argv.index("--run-id") + 1], RUN)
         self.assertEqual(argv[argv.index("--master-addr") + 1], "127.0.0.1")
+        self.assertEqual(argv[argv.index("--results-dir") + 1], str(self.results))
         self.assertEqual(cwd, PROTOTYPE)
 
     def test_request_tu_choi_ve_idle(self):
