@@ -5,6 +5,7 @@ and every agent turns the same parameters into the same experiment, so fingerpri
 """
 from __future__ import annotations
 
+import re
 from dataclasses import asdict, dataclass, fields
 from datetime import datetime
 from typing import Any
@@ -124,6 +125,14 @@ def build_experiment(params: RunParams, workers: list[str], run_id: str) -> dict
     if params.quick:
         data["synthetic_samples"] = QUICK_SAMPLES
     return data
+
+
+_RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,79}")
+
+
+def valid_run_id(value: Any) -> bool:
+    """A run_id becomes a folder and file name on every machine; nothing that can leave it."""
+    return isinstance(value, str) and bool(_RUN_ID.fullmatch(value)) and ".." not in value
 
 
 def new_run_id(params: RunParams, now: datetime) -> str:

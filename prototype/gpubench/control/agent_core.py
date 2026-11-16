@@ -26,7 +26,7 @@ import yaml
 
 from ..app.config_loader import CONFIGS_DIR, PROJECT_DIR, RESULTS_DIR, load_machine
 from .protocol import (AGENT_VERSION, APPROVAL_VALID_S, ProtocolError, RunParams, build_experiment,
-                       validate_params)
+                       valid_run_id, validate_params)
 
 Approver = Callable[[dict], "tuple[str, str]"]
 Launcher = Callable[[list, Path, Path], Any]
@@ -116,6 +116,7 @@ class AgentCore:
         self._project_dir = project_dir
         self._clock = clock
         self._lock = threading.Lock()
+        self._started_runs: set[str] = set()   # the only runs whose results may be downloaded
         self._gpu: dict | None = None
         self._torch: str | None = None
         self._reset("IDLE")
@@ -160,6 +161,11 @@ class AgentCore:
 
     # ---------------------------------------------------------------- approval
 
+    @staticmethod
+    def _check_run_id(run_id) -> None:
+        if not valid_run_id(run_id):
+            raise AgentError(400, f"run_id không hợp lệ: {run_id!r}")
+
     def _parse(self, payload: dict) -> tuple[str, RunParams, list[str]]:
         try:
             run_id, workers = payload["run_id"], payload["workers"]
@@ -168,8 +174,7 @@ class AgentCore:
             raise AgentError(400, f"Thiếu trường {e}") from None
         except ProtocolError as e:
             raise AgentError(400, str(e)) from None
-        if not isinstance(run_id, str) or not run_id:
-            raise AgentError(400, "run_id không hợp lệ")
+        self._check_run_id(run_id)
         if not isinstance(workers, list) or not all(isinstance(w, str) for w in workers):
             raise AgentError(400, "workers phải là danh sách tên máy")
         if self.name not in workers:
@@ -224,6 +229,7 @@ class AgentCore:
                     "--run-id", run_id, "--master-addr", master_addr,
                     "--results-dir", str(self._results_dir)]
             self._process = self._launcher(argv, self._project_dir, self._log_path(run_id))
+            self._started_runs.add(run_id)
             self._state = "RUNNING"
         return self.status(run_id)
 
@@ -235,6 +241,9 @@ class AgentCore:
         return self._results_dir / run_id / f"rank{rank}-{self.name}.jsonl"
 
     def _refresh_locked(self) -> None:
+        if self._state == "APPROVED" and self._clock() - self._approved_at > APPROVAL_VALID_S:
+            self._reset("IDLE")     # nobody started it in time; the machine is free again
+            return
         if self._state != "RUNNING" or self._process is None:
             return
         code = self._process.poll()
@@ -292,8 +301,10 @@ class AgentCore:
         return self.status(run_id)
 
     def results_zip(self, run_id: str) -> bytes:
+        self._check_run_id(run_id)
         run_dir = self._results_dir / run_id
-        if not run_dir.is_dir():
+        if (run_id not in self._started_runs or run_dir.resolve().parent != self._results_dir.resolve()
+                or not run_dir.is_dir()):
             raise AgentError(404, f"Máy '{self.name}' không có kết quả của lượt {run_id}")
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:

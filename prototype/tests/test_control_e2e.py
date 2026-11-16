@@ -186,6 +186,25 @@ class FakeTrainingTest(unittest.TestCase):
         self.assertEqual(self.lab.launchers["sim-0"].calls, [])
         self.assertIn(("decision", {"machine": "sim-1", "decision": "deny", "reason": "đang dùng máy"}),
                       self.lab.events)
+        self.assertEqual(self.lab.cores["sim-0"].state, "IDLE")   # sim-0 had allowed; released
+
+    def test_huy_sau_khi_dong_y(self):
+        s = self.lab.session(quick("ddp"))
+        s.check()
+        s.request_all()
+        s.cancel("Người điều phối huỷ")
+        self.assertEqual([c.state for c in self.lab.cores.values()], ["IDLE", "IDLE"])
+
+    def test_start_loi_o_rank0_tha_may_con_lai(self):
+        s = self.lab.session(quick("ddp"))
+        s.check()
+        s.request_all()
+        self.lab.servers["sim-0"].shutdown()
+        self.lab.servers["sim-0"].server_close()
+        with self.assertRaises(ProtocolError):
+            s.start()
+        self.assertEqual(self.lab.cores["sim-1"].state, "IDLE")
+        self.assertEqual(self.lab.launchers["sim-1"].calls, [])
 
     def test_noi_lai_khi_mot_may_xong_mot_may_con_chay(self):
         s = self.started()

@@ -89,6 +89,12 @@ class RunIdAndRankTest(unittest.TestCase):
         q = protocol.validate_params({"mode": "localsgd", **QUICK})
         self.assertEqual(protocol.new_run_id(q, now), "thu-localsgd-tiny_cnn-20261116-090507")
 
+    def test_run_id_hop_le(self):
+        self.assertTrue(protocol.valid_run_id("lab-ddp-resnet20-20261116-090507"))
+        self.assertTrue(protocol.valid_run_id("thu-localsgd-tiny_cnn-20261116-090507"))
+        for bad in ("..", "../a", r"a\b", "a/b", "C:x", "", ".a", "-a", "x" * 81, None, 5):
+            self.assertFalse(protocol.valid_run_id(bad), bad)
+
     def test_rank_order(self):
         infos = [{"name": "trinh-duc", "gpu": {"vram_mb": 4096}},
                  {"name": "doan-tuan", "gpu": {"vram_mb": 6141}},

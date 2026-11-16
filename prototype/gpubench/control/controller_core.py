@@ -25,7 +25,7 @@ from typing import Callable
 import yaml
 
 from .protocol import (APPROVAL_TIMEOUT_S, DEFAULT_PORT, TOKEN_HEADER, ProtocolError, RunParams,
-                       new_run_id, rank_order, validate_params)
+                       new_run_id, rank_order, valid_run_id, validate_params)
 
 FREE_STATES = ("IDLE", "FINISHED", "FAILED", "STOPPED")
 DONE_STATES = ("FINISHED", "FAILED", "STOPPED", "LOST")
@@ -216,7 +216,15 @@ class RunSession:
 
         self.decisions = _parallel(self._active(), ask)
         self.approved = all(d == "allow" for d, _ in self.decisions.values())
+        if not self.approved:   # release the machines that did allow
+            self.cancel("Không đủ máy đồng ý; lượt bị huỷ")
         return dict(self.decisions)
+
+    def cancel(self, reason: str) -> None:
+        """Releases every machine of a run that has not started. Errors are ignored."""
+        _parallel(self._active(), lambda c: c.stop(self.run_id, reason))
+        self.approved = False
+        self.on_event("cancelled", {"reason": reason})
 
     def _write_record(self, **updates) -> None:
         path = self.run_dir / "controller.json"
@@ -234,17 +242,12 @@ class RunSession:
                            decisions={k: list(v) for k, v in self.decisions.items()},
                            started_at=datetime.fromtimestamp(self.clock()).isoformat(timespec="seconds"))
         payload = {**self._payload(), "master_addr": self.master_addr}
-        started = []
         for client in self._active():
             try:
                 client.start(payload)
-                started.append(client)
             except (AgentUnavailable, AgentRejected) as e:
-                for other in started:
-                    try:
-                        other.stop(self.run_id, f"{client.name} không bắt đầu được")
-                    except (AgentUnavailable, AgentRejected):
-                        pass
+                # Stop everyone, the failing machine too: it may have started and lost the reply.
+                self.cancel(f"{client.name} không bắt đầu được")
                 self._write_record(outcome={"state": "failed", "reason": str(e)})
                 raise ProtocolError(str(e)) from None
         self.started = True
@@ -356,7 +359,10 @@ class RunSession:
             if info.get("state") not in ("RUNNING", "FINISHED", "FAILED", "STOPPED"):
                 continue
             run_id = info["run_id"]
-            root = quick_root if run_id.startswith("thu-") else results_root
+            if not valid_run_id(run_id):    # it becomes a folder name here
+                on_event("resume_invalid", {"machine": name, "run_id": run_id})
+                continue
+            root =quick_root if run_id.startswith("thu-") else results_root
             path = root / run_id / "controller.json"
             if not path.is_file():
                 continue

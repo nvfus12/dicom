@@ -310,6 +310,7 @@ class ControllerWindow:
         if len(clients) < 2:
             messagebox.showerror("Chưa đủ máy", "Cần chọn ít nhất 2 máy.", parent=self.root)
             return
+        self._release_unstarted()
         session = self.session_factory(clients, params, self.results_root, self.quick_root,
                                        self.prototype_dir, on_event=self._on_event)
         self.session = session
@@ -329,6 +330,18 @@ class ControllerWindow:
                 return
             self._post(lambda: self._request_done(session))
         self._background(work)
+
+    def _release_unstarted(self, wait_s: float = 0) -> None:
+        """An approved run that was never started keeps the machines busy; let them go."""
+        old = self.session
+        if old is None or not old.approved or getattr(old, "started", False):
+            return
+        old.approved = False
+        thread = threading.Thread(target=lambda: old.cancel("Người điều phối huỷ lượt chưa bắt đầu"),
+                                  daemon=True)
+        thread.start()
+        if wait_s:
+            thread.join(wait_s)
 
     def _request_failed(self, message: str) -> None:
         self._busy = False
@@ -494,6 +507,7 @@ class ControllerWindow:
         if self._closing:
             return
         self._closing = True
+        self._release_unstarted(wait_s=5)
         if self._drain_timer is not None:
             try:
                 self.root.after_cancel(self._drain_timer)

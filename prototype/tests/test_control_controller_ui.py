@@ -81,6 +81,9 @@ class FakeSession:
     def stop_all(self, reason):
         self.calls.append("stop_all")
 
+    def cancel(self, reason):
+        self.calls.append("cancel")
+
     def collect(self):
         self.calls.append("collect")
         return self.results_root / self.run_id
@@ -187,6 +190,20 @@ class ControllerWindowTest(unittest.TestCase):
         FakeSession.approve = True
         self.win.send_button.invoke()
         self.assertTrue(pump_until(self.win.root, lambda: str(self.win.start_button["state"]) == "normal"))
+
+    def test_gui_lai_truoc_start_huy_phien_cu(self):
+        self.win.send_button.invoke()
+        self.assertTrue(pump_until(self.win.root, lambda: str(self.win.start_button["state"]) == "normal"))
+        first = FakeSession.instances[-1]
+        self.win.send_button.invoke()
+        self.assertTrue(pump_until(self.win.root, lambda: "cancel" in first.calls))
+
+    def test_dong_cua_so_truoc_start_huy_phien(self):
+        self.win.send_button.invoke()
+        self.assertTrue(pump_until(self.win.root, lambda: str(self.win.start_button["state"]) == "normal"))
+        session = FakeSession.instances[-1]
+        self.win.quit()
+        self.assertIn("cancel", session.calls)
 
     def test_ket_thuc_luot_nap_bang_ket_qua(self):
         self.win.send_button.invoke()

@@ -177,6 +177,25 @@ class AgentCoreTest(unittest.TestCase):
         self.assertEqual(caught.exception.status, 400)
         self.assertEqual(self.asked, 0)
 
+    def test_run_id_nguy_hiem_bi_tu_choi(self):
+        for bad in (r"..\machines\sim-1", "../x", r"C:\Users", "a/b", "", ".hidden", "x" * 120, "a:b"):
+            with self.subTest(run_id=bad), self.assertRaises(AgentError) as caught:
+                self.request(run_id=bad)
+            self.assertEqual(caught.exception.status, 400)
+        self.assertEqual(self.asked, 0)
+
+    def test_results_chi_cho_luot_da_chay_tren_agent(self):
+        (self.results / "khac").mkdir(parents=True)
+        (self.results / "khac" / "bi-mat.txt").write_text("x", encoding="utf-8")
+        for run_id in ("khac", "..", r"..\..", r"C:\Users"):
+            with self.subTest(run_id=run_id), self.assertRaises(AgentError):
+                self.core.results_zip(run_id)
+
+    def test_status_va_stop_tu_choi_run_id_la(self):
+        with self.assertRaises(AgentError) as caught:
+            self.core.status(r"..\..")
+        self.assertIn(caught.exception.status, (400, 404))
+
     def test_request_may_khong_co_trong_danh_sach(self):
         with self.assertRaises(AgentError):
             self.core.request({"run_id": RUN, "controller": "C", "params": PARAMS, "workers": ["sim-0"]})
@@ -188,6 +207,12 @@ class AgentCoreTest(unittest.TestCase):
             self.start()
         self.assertEqual(caught.exception.status, 409)
         self.assertEqual(self.core.state, "IDLE")
+
+    def test_phe_duyet_het_han_tu_ve_ranh(self):
+        self.request()
+        self.clock.now += protocol.APPROVAL_VALID_S + 1
+        self.assertEqual(self.core.state, "IDLE")
+        self.assertEqual(self.request(run_id="thu-ddp-tiny_cnn-20261116-120000")["decision"], "allow")
 
     def test_params_khac_luc_xin_phep(self):
         self.request()
