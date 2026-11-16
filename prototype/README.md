@@ -35,7 +35,8 @@ gpubench/
     metrics.py   JSONL
     monitor.py   NVML (optional)
   app/         composition: read YAML, pick adapters, run
-  cli.py       python -m gpubench run|plan|check|profile|netcheck|machines
+  control/     lab control GUI: agent on each worker, controller on the coordinator
+  cli.py       python -m gpubench run|plan|check|profile|netcheck|machines|agent|controller
 configs/
   machines/    ONE FILE PER MACHINE
   experiments/ one file per experiment
@@ -46,6 +47,32 @@ configs/
 A new adapter is only needed for a new *kind* of infrastructure, for example AMD GPUs (ROCm), Linux with NCCL, or another dataset.
 
 Files for real machines are git-ignored because they hold owners' names and IPs. Copy `configs/machines/machine.yaml.example` and fill it in. The `sim-*` profiles used for CPU simulation are included.
+
+## Lab control GUI
+
+Runs a whole training run from one window on the coordinator, without typing commands on the workers. Every run asks each worker's owner for permission first.
+
+1. On each worker (inside its `.venv`), keep this window open:
+   ```bash
+   python -m gpubench agent -m <machine name>
+   ```
+   The agent listens on TCP port 8765. Allow inbound TCP from the lab network in the firewall.
+2. On the coordinator, copy `configs/lab.yaml.example` to `configs/lab.yaml` (git-ignored), set the agents' addresses and the token, then:
+   ```bash
+   python -m gpubench controller
+   ```
+3. In the controller: pick the workers, dataset, model and mode (DDP or local SGD with H; Sync under "Nâng cao" as a fallback when DDP fails), click **Gửi yêu cầu**. Each owner gets a dialog and clicks allow or refuse. When all have allowed, click **Start**.
+4. The controller shows progress and an accuracy curve. When the run ends, it downloads every worker's logs into `results/<run_id>/` and runs `analyze/analyze.py` on all `lab-*` runs (`results/report-lab/`).
+
+"Chạy thử nhanh" (quick run) trains a tiny CNN on synthetic data for a minute or two to check the network and setup; its results go to `results-thu/` and are not analysed.
+
+How it behaves when things go wrong:
+- The agent never runs commands it receives; it only accepts named parameters from an allow-list and runs `gpubench run` with them.
+- An owner can stop training at any time from the agent window; the controller then stops every other worker and records who stopped the run.
+- A worker that stops answering does not stop the run by itself (a busy 2.4 GHz Wi-Fi can drop polls); a worker whose training dies makes gloo fail on the others.
+- If the controller is closed during a run, training continues; reopening the controller picks the run up again and collects its results.
+
+Verified on CPU with two simulated workers on localhost: the full flow with real windows and real `gpubench run` for local SGD and DDP, an owner stopping mid-run, and a controller reopened mid-run. **Not yet verified on real GPUs or across real machines.**
 
 ## Workflow with real machines
 
