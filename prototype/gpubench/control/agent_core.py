@@ -149,10 +149,15 @@ class AgentCore:
     def workers(self) -> list[str]:
         return list(self._workers)
 
-    def info(self) -> dict:
+    def warm_up(self) -> None:
+        """Imports torch and probes the GPU once. Slow on a cold Windows start, so the agent
+        does it before answering requests rather than inside the controller's first /info."""
         if self._gpu is None:
             self._gpu = detect_gpu(self.machine.device, self.machine.cuda_index)
             self._torch = torch_version()
+
+    def info(self) -> dict:
+        self.warm_up()
         with self._lock:
             self._refresh_locked()
             return {"name": self.name, "owner": self.machine.owner, "address": self.machine.address,

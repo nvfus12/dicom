@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))   # shared fakes in test_control_agent
 
 from gpubench import cli  # noqa: E402
-from gpubench.control import agent_ui  # noqa: E402
+from gpubench.control import agent_core, agent_ui  # noqa: E402
 from gpubench.control.agent_core import AgentCore  # noqa: E402
 from test_control_agent import PROTOTYPE, RUN, WORKERS, FakeLauncher, make_configs  # noqa: E402
 
@@ -175,6 +175,33 @@ class AgentWindowTest(unittest.TestCase):
         while not reply and time.monotonic() < deadline:
             time.sleep(0.05)
         self.assertEqual(reply["decision"], "deny")
+
+
+class AgentWarmUpTest(unittest.TestCase):
+    def test_kiem_tra_gpu_truoc_khi_nhan_yeu_cau(self):
+        # Importing torch and starting CUDA can take longer than the controller's 10 s timeout,
+        # so the agent does it before it starts answering, not inside the first /info.
+        tmp = Path(tempfile.mkdtemp())
+        calls = []
+        real = agent_core.detect_gpu
+
+        def counting(*args):
+            calls.append(args)
+            return real(*args)
+        try:
+            with mock.patch.object(agent_core, "detect_gpu", counting):
+                app = agent_ui.AgentWindow(
+                    lambda approver: AgentCore("sim-1", approver, FakeLauncher(),
+                                               configs_dir=make_configs(tmp), results_dir=tmp / "r",
+                                               project_dir=PROTOTYPE), "127.0.0.1", 0, "t")
+                self.assertEqual(len(calls), 1)
+                app.core.info()
+                app.core.info()
+                self.assertEqual(len(calls), 1)
+                app.quit()
+                gc.collect()
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
 
 class AgentCliTest(unittest.TestCase):

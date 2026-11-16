@@ -60,9 +60,10 @@ class Lab:
     def _approver(self, name):
         return lambda payload: self.decisions.get(name, ("allow", ""))
 
-    def session(self, params: dict) -> RunSession:
+    def session(self, params: dict, clock=time.time) -> RunSession:
         return RunSession(self.clients, validate_params(params), self.results, self.quick_results,
-                          PROTOTYPE, on_event=lambda kind, data: self.events.append((kind, data)))
+                          PROTOTYPE, on_event=lambda kind, data: self.events.append((kind, data)),
+                          clock=clock)
 
     def close(self):
         for core in self.cores.values():
@@ -238,6 +239,38 @@ class FakeTrainingTest(unittest.TestCase):
         self.assertEqual(statuses["sim-1"]["state"], "UNREACHABLE")
         self.assertEqual(statuses["sim-0"]["state"], "RUNNING")
         self.assertFalse(self.lab.launchers["sim-0"].process.terminated)
+
+    def test_may_chet_han_thi_luot_van_ket_thuc(self):
+        now = [1000.0]
+        s = self.lab.session(quick("ddp"), clock=lambda: now[0])
+        s.check()
+        s.request_all()
+        s.start()
+        self.finish("sim-0", s.run_id)
+        self.lab.servers["sim-1"].shutdown()
+        self.lab.servers["sim-1"].server_close()
+        self.assertFalse(s.done(s.poll_once()))           # just unreachable: keep waiting
+        now[0] += controller_core.UNREACHABLE_LIMIT_S + 1
+        statuses = s.poll_once()
+        self.assertEqual(statuses["sim-1"]["state"], "LOST")
+        self.assertTrue(s.done(statuses))
+        record = json.loads((s.collect() / "controller.json").read_text("utf-8"))
+        self.assertEqual(record["missing"], ["sim-1"])
+        self.assertEqual(record["outcome"]["state"], "failed")
+        self.assertIn("sim-1", record["outcome"]["reason"])
+
+    def test_may_mat_lien_lac_sau_khi_bam_dung_ket_thuc_som_hon(self):
+        now = [1000.0]
+        s = self.lab.session(quick("ddp"), clock=lambda: now[0])
+        s.check()
+        s.request_all()
+        s.start()
+        self.lab.servers["sim-1"].shutdown()
+        self.lab.servers["sim-1"].server_close()
+        s.stop_all("Người điều phối dừng")
+        self.assertFalse(s.done(s.poll_once()))
+        now[0] += controller_core.STOPPING_GRACE_S + 1
+        self.assertTrue(s.done(s.poll_once()))
 
     def test_dung_tu_controller(self):
         s = self.started()

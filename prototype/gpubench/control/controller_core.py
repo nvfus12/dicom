@@ -29,6 +29,10 @@ from .protocol import (APPROVAL_TIMEOUT_S, DEFAULT_PORT, TOKEN_HEADER, ProtocolE
 
 FREE_STATES = ("IDLE", "FINISHED", "FAILED", "STOPPED")
 DONE_STATES = ("FINISHED", "FAILED", "STOPPED", "LOST")
+# A machine that stops answering is given up on only when every other machine is done:
+# after gloo's own timeout (timeout_s 300) plus a margin, or sooner once a stop was sent.
+UNREACHABLE_LIMIT_S = 360
+STOPPING_GRACE_S = 60
 ANALYZE_ACC = ["0.5", "0.6", "0.7", "0.8"]
 ANALYZE_MINUTES = ["10", "30"]
 
@@ -257,6 +261,8 @@ class RunSession:
 
     def _reason(self, name: str, status: dict) -> str:
         if status["state"] == "LOST":
+            if status.get("unreachable"):
+                return f"Mất liên lạc với {name} quá lâu; không gom được kết quả của máy này"
             return f"{name} không còn giữ lượt chạy này (agent đã khởi động lại?)"
         if status["state"] == "STOPPED":
             who = status.get("stopped_by")
@@ -282,6 +288,7 @@ class RunSession:
             else:
                 self._unreachable_since.pop(name, None)
                 statuses[name] = reply
+        self._give_up_on_unreachable(statuses)
         self.last_statuses = statuses
 
         broken = [n for n, s in statuses.items() if s["state"] in ("FAILED", "STOPPED", "LOST")]
@@ -290,6 +297,17 @@ class RunSession:
             self.stop_all(self._reason(broken[0], statuses[broken[0]]))
         self.on_event("progress", statuses)
         return statuses
+
+    def _give_up_on_unreachable(self, statuses: dict[str, dict]) -> None:
+        silent = [n for n, s in statuses.items() if s["state"] == "UNREACHABLE"]
+        others_done = all(s["state"] in DONE_STATES for n, s in statuses.items() if n not in silent)
+        if not silent or not others_done:
+            return
+        limit = STOPPING_GRACE_S if self.stop_reason else UNREACHABLE_LIMIT_S
+        for name in silent:
+            if self.clock() - statuses[name]["since"] > limit:
+                statuses[name] = {"state": "LOST", "machine": name, "unreachable": True,
+                                  "error": statuses[name].get("error")}
 
     def done(self, statuses: dict[str, dict]) -> bool:
         return all(s["state"] in DONE_STATES for s in statuses.values())

@@ -25,11 +25,13 @@ class AgentWindow:
         self._pending: queue.Queue[dict] = queue.Queue()
         self._closing = False
         self._closed = False
+        self._serving = False
         self._timers: dict[str, str] = {}
         self._close_dialog: Callable[[str, str], None] | None = None
         self._last_state: str | None = None
 
         self.core = core_factory(self._approve)
+        self.core.warm_up()
         self.server = make_server(self.core, host, port, token)
         self.port = self.server.server_address[1]
 
@@ -239,6 +241,7 @@ class AgentWindow:
         self._timers["poll"] = self.root.after(POLL_MS, self._poll)
 
     def serve(self) -> None:
+        self._serving = True
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         self._timers["poll"] = self.root.after(POLL_MS, self._poll)
         self.write_log(f"Agent sẵn sàng tại {self.core.machine.address or '?'}:{self.port}.")
@@ -266,7 +269,8 @@ class AgentWindow:
             except tk.TclError:
                 pass
         self.core.shutdown()
-        self.server.shutdown()
+        if self._serving:       # shutdown() waits for serve_forever and would hang otherwise
+            self.server.shutdown()
         self.server.server_close()
         self._closed = True
         self.root.destroy()

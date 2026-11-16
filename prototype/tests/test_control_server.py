@@ -66,6 +66,22 @@ class AgentServerTest(unittest.TestCase):
         self.assertEqual(code, 401)
         self.assertIn("token", body["error"].lower())
 
+    def test_agent_thu_hai_cung_cong_bi_tu_choi(self):
+        # On Windows SO_REUSEADDR lets a second server bind the same port silently, so requests
+        # would be split between two agents. The second agent must fail to start instead.
+        port = self.server.server_address[1]
+        with self.assertRaises(OSError):
+            second = make_server(self.core, "127.0.0.1", port, TOKEN)
+            second.server_close()
+
+    def test_post_sai_token_van_nhan_401_khong_bi_cat_ket_noi(self):
+        # Answering before reading the body makes Windows reset the connection; the controller
+        # would then report "cannot connect" instead of "wrong token".
+        big = {"run_id": RUN, "padding": "x" * 2_000_000}
+        for _ in range(3):
+            self.assertEqual(self.error("POST", "/request", big, token="sai")[0], 401)
+            self.assertEqual(self.error("POST", "/khong-co", big)[0], 404)
+
     def test_info(self):
         self.assertEqual(self.call("GET", "/info")["name"], "sim-1")
 

@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 import json
+import socket
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from .agent_core import AgentCore, AgentError
 from .protocol import TOKEN_HEADER
+
+MAX_BODY = 1_000_000    # requests are small JSON; anything larger is drained and refused
 
 
 def make_server(core: AgentCore, host: str, port: int, token: str) -> ThreadingHTTPServer:
@@ -34,10 +37,27 @@ def make_server(core: AgentCore, host: str, port: int, token: str) -> ThreadingH
                 raise AgentError(400, "Thiếu run_id")
             return values[0]
 
-        def _body(self) -> dict:
-            length = int(self.headers.get("Content-Length") or 0)
+        def _read_raw(self) -> None:
+            """Reads the whole body before any answer: replying to a request whose body is still
+            unread makes Windows reset the connection, and the client sees no status at all."""
             try:
-                body = json.loads(self.rfile.read(length) or b"{}")
+                length = max(0, int(self.headers.get("Content-Length") or 0))
+            except ValueError:
+                length = 0
+            self._raw, self._too_large = b"", length > MAX_BODY
+            while length > 0:
+                chunk = self.rfile.read(min(length, 65536))
+                if not chunk:
+                    break
+                if not self._too_large:
+                    self._raw += chunk
+                length -= len(chunk)
+
+        def _body(self) -> dict:
+            if self._too_large:
+                raise AgentError(413, "Nội dung yêu cầu quá lớn")
+            try:
+                body = json.loads(self._raw or b"{}")
             except (json.JSONDecodeError, UnicodeDecodeError):
                 raise AgentError(400, "Nội dung yêu cầu không phải JSON") from None
             if not isinstance(body, dict):
@@ -66,6 +86,8 @@ def make_server(core: AgentCore, host: str, port: int, token: str) -> ThreadingH
             })
 
         def do_POST(self) -> None:
+            self._read_raw()
+
             def stop():
                 body = self._body()
                 if "run_id" not in body:
@@ -80,6 +102,18 @@ def make_server(core: AgentCore, host: str, port: int, token: str) -> ThreadingH
         def log_message(self, fmt: str, *args) -> None:
             pass  # the agent window shows what matters
 
-    server = ThreadingHTTPServer((host, port), Handler)
+    server = _ExclusiveServer((host, port), Handler)
     server.daemon_threads = True
     return server
+
+
+class _ExclusiveServer(ThreadingHTTPServer):
+    """Refuses to share its port. On Windows SO_REUSEADDR lets a second agent bind the same
+    port without error, and requests would then be split between the two."""
+
+    allow_reuse_address = False
+
+    def server_bind(self) -> None:
+        if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()

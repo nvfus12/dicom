@@ -159,6 +159,7 @@ def cmd_agent(args) -> int:
 
     machine = load_machine(args.machine)
     print(f"Agent {machine.name}: máy điều phối gọi tới {machine.address or '?'}:{args.port}")
+    print("Đang kiểm tra GPU (lần đầu có thể mất vài chục giây)...", flush=True)
     AgentWindow(lambda approver: AgentCore(machine.name, approver),
                 args.host, args.port, args.token).run()
     return 0
