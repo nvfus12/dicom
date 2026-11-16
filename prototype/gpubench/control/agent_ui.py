@@ -161,7 +161,10 @@ class AgentWindow:
         allow.pack(side="right", padx=(0, 8))
         win.protocol("WM_DELETE_WINDOW", lambda: finish("deny", "Chủ máy đóng hộp thoại"))
         self._close_dialog = finish
-        win.grab_set()
+        try:
+            win.grab_set()
+        except tk.TclError:     # another application holds the grab; the dialog still works
+            pass
 
         self.root.deiconify()           # bring it in front of the owner
         win.update_idletasks()
@@ -227,7 +230,12 @@ class AgentWindow:
         except queue.Empty:
             pass
         else:
-            self._ask_owner(pending)
+            try:
+                self._ask_owner(pending)
+            except Exception as e:  # never leave the HTTP thread waiting, never stop polling
+                pending["result"] = ("deny", f"Agent không mở được hộp thoại: {e}")
+                pending["event"].set()
+                self.write_log(f"Không mở được hộp thoại xin phép: {e}")
         self._timers["poll"] = self.root.after(POLL_MS, self._poll)
 
     def serve(self) -> None:

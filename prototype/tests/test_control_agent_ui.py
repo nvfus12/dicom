@@ -158,6 +158,16 @@ class AgentWindowTest(unittest.TestCase):
         self.app.quit()
         self.assertTrue(self.launcher.process.terminated)
 
+    def test_grab_that_bai_van_hoi_va_van_nhan_yeu_cau_sau(self):
+        # Another application holding the grab must not break the dialog or the request loop.
+        with mock.patch.object(tk.Toplevel, "grab_set", side_effect=tk.TclError("grab failed")):
+            reply = self.ask()
+            self.answer("Từ chối", reply)
+            self.assertEqual(reply["decision"], "deny")
+            reply = self.ask()
+            self.answer("Cho phép", reply)
+        self.assertEqual(reply["decision"], "allow")
+
     def test_tat_agent_khi_dang_hoi_la_tu_choi(self):
         reply = self.ask()
         self.app.quit()

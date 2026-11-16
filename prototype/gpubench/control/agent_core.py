@@ -68,7 +68,8 @@ def read_progress(path: Path) -> dict:
             if per_epoch and total:
                 progress["total_epochs"] = total // per_epoch
         elif event in ("step", "eval"):
-            progress["epoch"] = record.get("epoch", progress["epoch"])
+            if record.get("epoch") is not None:     # the trainer counts from 0; show 1-based
+                progress["epoch"] = record["epoch"] + 1
             progress["step"] = record.get("step", progress["step"])
             if event == "eval" and record.get("test_acc") is not None:
                 progress["test_acc"] = record["test_acc"]

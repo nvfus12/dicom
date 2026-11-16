@@ -3,10 +3,13 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 import zipfile
 from pathlib import Path
@@ -197,9 +200,9 @@ class AgentCoreTest(unittest.TestCase):
         self.start()
         write_events(self.log_file,
                      {"event": "train_start", "steps_per_epoch": 10, "total_steps": 20},
-                     {"event": "step", "step": 10, "epoch": 1},
-                     {"event": "eval", "step": 10, "epoch": 1, "train_time_s": 3.0, "test_acc": 0.4},
-                     {"event": "eval", "step": 20, "epoch": 2, "train_time_s": 6.0, "test_acc": 0.6},
+                     {"event": "step", "step": 10, "epoch": 0},
+                     {"event": "eval", "step": 10, "epoch": 0, "train_time_s": 3.0, "test_acc": 0.4},
+                     {"event": "eval", "step": 20, "epoch": 1, "train_time_s": 6.0, "test_acc": 0.6},
                      {"event": "train_end", "stop_reason": "max_epochs"})
         self.launcher.process.exit_code = 0
         st = self.core.status(RUN)
@@ -279,12 +282,47 @@ class AgentCoreTest(unittest.TestCase):
         self.assertEqual(info["agent_version"], protocol.AGENT_VERSION)
 
 
+def pid_alive(pid: int) -> bool:
+    if sys.platform == "win32":
+        out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True, text=True).stdout
+        return str(pid) in out
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+class DefaultLauncherTest(unittest.TestCase):
+    def test_dung_giet_ca_tien_trinh_python_that(self):
+        # With a venv on Windows, sys.executable is a launcher that starts the real interpreter
+        # as a child. Stopping must end the interpreter that actually trains, not just the launcher.
+        tmp = Path(tempfile.mkdtemp())
+        try:
+            pid_file = tmp / "pid.txt"
+            script = f"import os, time; open(r'{pid_file}', 'w').write(str(os.getpid())); time.sleep(120)"
+            process = agent_core.default_launcher([sys.executable, "-c", script], tmp, tmp / "log.txt")
+            deadline = time.monotonic() + 30
+            while not (pid_file.is_file() and pid_file.read_text()):
+                self.assertLess(time.monotonic(), deadline, "tiến trình không khởi động")
+                time.sleep(0.1)
+            real_pid = int(pid_file.read_text())
+            process.terminate()
+            process.wait(15)
+            time.sleep(0.5)
+            self.assertIsNotNone(process.poll())
+            self.assertFalse(pid_alive(real_pid), "tiến trình Python thật vẫn còn chạy")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
 class ReadProgressTest(unittest.TestCase):
     def test_bo_dong_hong(self):
         tmp = Path(tempfile.mkdtemp())
         try:
             path = tmp / "r.jsonl"
-            write_events(path, {"event": "eval", "epoch": 1, "step": 5, "train_time_s": 1.0, "test_acc": 0.3},
+            # The trainer numbers epochs from 0; progress reports epochs completed.
+            write_events(path, {"event": "eval", "epoch": 0, "step": 5, "train_time_s": 1.0, "test_acc": 0.3},
                          partial='{"event": "eval", "epo')
             progress = agent_core.read_progress(path)
             self.assertEqual((progress["epoch"], progress["test_acc"], progress["finished"]), (1, 0.3, False))
