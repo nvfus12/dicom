@@ -349,10 +349,13 @@ class RunSession:
         return self.run_dir
 
     def analyze(self) -> Path | None:
+        """Analyses every run of the same kind: lab runs into results/report-lab, quick runs
+        into results-thu/report-thu, so trial numbers never mix with the paper's."""
         if self.params.quick:
-            return None
-        out = self.results_root / "report-lab"
-        argv = [sys.executable, "analyze/analyze.py", "lab-", "--results", str(self.results_root),
+            root, needle, out = self.quick_root, "thu-", self.quick_root / "report-thu"
+        else:
+            root, needle, out = self.results_root, "lab-", self.results_root / "report-lab"
+        argv = [sys.executable, "analyze/analyze.py", needle, "--results", str(root),
                 "--out", str(out), "--acc", *ANALYZE_ACC, "--at-minutes", *ANALYZE_MINUTES]
         try:
             done = subprocess.run(argv, cwd=self.prototype_dir, capture_output=True, text=True,

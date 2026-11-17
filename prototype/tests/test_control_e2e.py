@@ -109,6 +109,10 @@ class FullRunTest(unittest.TestCase):
         self.assertEqual(sorted(p.name for p in run_dir.glob("rank*.jsonl")),
                          ["rank0-sim-0.jsonl", "rank1-sim-1.jsonl"])
         self.assertEqual(outcome(run_dir)["state"], "finished")
+        report = s.analyze()        # real analyze.py on the real quick run
+        self.assertIsNotNone(report, [e for e in self.lab.events if e[0] == "analyze_failed"])
+        self.assertTrue((report / "runs.csv").is_file())
+        self.assertIn(s.run_id, (report / "runs.csv").read_text("utf-8"))
         return run_dir
 
     def test_chay_thu_localsgd_tron_vong(self):
@@ -311,11 +315,17 @@ class FakeTrainingTest(unittest.TestCase):
         self.assertEqual(run.call_args.kwargs["cwd"], PROTOTYPE)
         self.assertEqual(report, self.lab.results / "report-lab")
 
-    def test_khong_phan_tich_luot_chay_thu(self):
+    def test_luot_chay_thu_phan_tich_rieng(self):
+        # Quick runs get their own report, kept apart from the lab report used in the paper.
         s = self.started()
         with mock.patch.object(controller_core.subprocess, "run") as run:
-            self.assertIsNone(s.analyze())
-        run.assert_not_called()
+            run.return_value = mock.Mock(returncode=0, stdout="ok", stderr="")
+            report = s.analyze()
+        argv = run.call_args.args[0]
+        self.assertEqual(argv[1:6], ["analyze/analyze.py", "thu-", "--results", str(self.lab.quick_results),
+                                     "--out"])
+        self.assertEqual(argv[6], str(self.lab.quick_results / "report-thu"))
+        self.assertEqual(report, self.lab.quick_results / "report-thu")
 
 
 class LabFileTest(unittest.TestCase):

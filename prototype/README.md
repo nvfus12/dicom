@@ -66,7 +66,7 @@ Runs a whole training run from one window on the coordinator, without typing com
 3. In the controller: pick the workers, dataset, model and mode (DDP or local SGD with H; Sync under "Nâng cao" as a fallback when DDP fails), click **Gửi yêu cầu**. Each owner gets a dialog and clicks allow or refuse. When all have allowed, click **Start**.
 4. The controller shows progress and an accuracy curve. When the run ends, it downloads every worker's logs into `results/<run_id>/` and runs `analyze/analyze.py` on all `lab-*` runs (`results/report-lab/`).
 
-"Chạy thử nhanh" (quick run) trains a tiny CNN on synthetic data for a minute or two to check the network and setup; its results go to `results-thu/` and are not analysed.
+"Chạy thử nhanh" (quick run) trains a tiny CNN on synthetic data for a minute or two to check the network and setup; its results go to `results-thu/` and are analysed separately into `results-thu/report-thu/`, never mixed with the lab report.
 
 How it behaves when things go wrong:
 - The agent never runs commands it receives; it only accepts named parameters from an allow-list and runs `gpubench run` with them.
