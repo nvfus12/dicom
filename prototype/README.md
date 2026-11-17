@@ -1,5 +1,7 @@
 # gpubench: benchmarking distributed training on lab laptop GPUs
 
+> **Setting up a lab worker laptop from `gpubench-pack.zip`?** Follow [WORKER_SETUP.md](WORKER_SETUP.md) only (Vietnamese, step by step). The rest of this README describes other setups (VPN, manual runs) that do not apply to that task.
+
 Benchmark code that compares single GPU, DDP and local SGD by **time to reach a target accuracy**.
 
 ## What has been verified
