@@ -137,6 +137,47 @@ class ControllerWindowTest(unittest.TestCase):
         self.assertEqual(self.win.worker_tree.set("doan-tuan", "rank"), "0")
         self.assertEqual(self.win.worker_tree.set("trinh-duc", "rank"), "1")
 
+    def address_of(self, name):
+        return next(c for c in self.win.clients if c.name == name).ref.address
+
+    def test_sua_ip_cap_nhat_client_va_luu_lab_yaml(self):
+        self.assertTrue(self.win.set_worker_address("trinh-duc", " 192.168.0.101 "))
+        self.assertEqual(self.address_of("trinh-duc"), "192.168.0.101")
+        self.assertEqual(self.address_of("doan-tuan"), "192.168.0.103")
+        agents, token = controller_ui.load_lab(self.lab)
+        self.assertEqual(token, "t")
+        self.assertEqual([(a.name, a.address) for a in agents],
+                         [("doan-tuan", "192.168.0.103"), ("trinh-duc", "192.168.0.101")])
+        self.win.root.update()
+        self.assertEqual(self.win.worker_tree.set("trinh-duc", "address"), "192.168.0.101:8765")
+
+    def test_ip_sai_bi_tu_choi(self):
+        for bad in ("192.168.0.999", "abc", "", "192.168.0"):
+            with mock.patch.object(controller_ui.messagebox, "showerror") as showerror:
+                self.assertFalse(self.win.set_worker_address("trinh-duc", bad))
+            showerror.assert_called_once()
+        self.assertEqual(self.address_of("trinh-duc"), "192.168.0.102")
+
+    def test_khong_sua_ip_khi_dang_co_luot(self):
+        self.win._busy = True
+        with mock.patch.object(controller_ui.messagebox, "showerror") as showerror:
+            self.assertFalse(self.win.set_worker_address("trinh-duc", "192.168.0.101"))
+        showerror.assert_called_once()
+        self.assertEqual(self.address_of("trinh-duc"), "192.168.0.102")
+
+    def test_nut_sua_ip_hoi_ip_cho_may_dang_chon(self):
+        self.win.worker_tree.selection_set("doan-tuan")
+        with mock.patch.object(controller_ui.simpledialog, "askstring", return_value="192.168.0.110") as ask:
+            self.win.edit_ip_button.invoke()
+        self.assertIn("192.168.0.103", str(ask.call_args))       # current IP offered for editing
+        self.assertEqual(self.address_of("doan-tuan"), "192.168.0.110")
+
+    def test_nut_sua_ip_huy_thi_giu_nguyen(self):
+        self.win.worker_tree.selection_set("doan-tuan")
+        with mock.patch.object(controller_ui.simpledialog, "askstring", return_value=None):
+            self.win.edit_ip_button.invoke()
+        self.assertEqual(self.address_of("doan-tuan"), "192.168.0.103")
+
     def test_h_chi_bat_khi_local_sgd(self):
         self.win.mode_var.set("ddp")
         self.win.root.update()

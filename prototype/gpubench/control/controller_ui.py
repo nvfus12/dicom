@@ -6,6 +6,7 @@ Tk thread drains, so widgets are only touched from the Tk thread.
 from __future__ import annotations
 
 import csv
+import ipaddress
 import os
 import queue
 import threading
@@ -13,12 +14,14 @@ import time
 import tkinter as tk
 from datetime import datetime
 from pathlib import Path
-from tkinter import messagebox, ttk
+from tkinter import messagebox, simpledialog, ttk
 from typing import Callable
 
 from ..app.config_loader import PROJECT_DIR
-from .controller_core import AgentClient, RunSession, load_lab
-from .protocol import MODE_LABELS, POLL_INTERVAL_S, ProtocolError, RunParams, rank_order, validate_params
+import yaml
+
+from .controller_core import AgentClient, AgentRef, RunSession, load_lab
+from .protocol import DEFAULT_PORT, MODE_LABELS, POLL_INTERVAL_S, ProtocolError, RunParams, rank_order, validate_params
 
 DATASETS = {"CIFAR-10": "cifar10"}
 MODELS = {"ResNet-20": "resnet20", "ResNet-18": "resnet18"}
@@ -39,8 +42,10 @@ class ControllerWindow:
         self.results_root = results_root or prototype_dir / "results"
         self.quick_root = quick_root or prototype_dir / "results-thu"
         self.poll_s = poll_s
-        refs, token = load_lab(lab_path)
-        self.clients = [client_factory(ref, token) for ref in refs]
+        self.lab_path = lab_path
+        self.client_factory = client_factory
+        refs, self._token = load_lab(lab_path)
+        self.clients = [client_factory(ref, self._token) for ref in refs]
         self.selected = {c.name for c in self.clients}
         self.infos: dict[str, dict] = {}
         self.session = None
@@ -61,7 +66,8 @@ class ControllerWindow:
         outer = ttk.Frame(self.root, padding=10)
         outer.pack(fill="both", expand=True)
 
-        workers = ttk.LabelFrame(outer, text="Worker (bấm vào dòng để chọn / bỏ chọn)", padding=6)
+        workers = ttk.LabelFrame(outer, text="Worker (bấm cột Dùng để chọn / bỏ chọn; nhấp đúp vào dòng "
+                                           "hoặc bấm Sửa IP để đổi địa chỉ)", padding=6)
         workers.pack(fill="x")
         columns = ("use", "address", "gpu", "vram", "state", "rank")
         self.worker_tree = ttk.Treeview(workers, columns=columns, height=4)
@@ -76,7 +82,12 @@ class ControllerWindow:
                                             "đang kiểm tra...", ""))
         self.worker_tree.pack(side="left", fill="x", expand=True)
         self.worker_tree.bind("<ButtonRelease-1>", self._toggle_worker)
-        ttk.Button(workers, text="Làm mới", command=self.refresh_workers).pack(side="right", padx=6)
+        self.worker_tree.bind("<Double-1>", lambda event: self.edit_ip())
+        side = ttk.Frame(workers)
+        side.pack(side="right", padx=6)
+        ttk.Button(side, text="Làm mới", command=self.refresh_workers).pack(fill="x")
+        self.edit_ip_button = ttk.Button(side, text="Sửa IP…", command=self.edit_ip)
+        self.edit_ip_button.pack(fill="x", pady=(4, 0))
 
         form = ttk.LabelFrame(outer, text="Cấu hình lượt chạy", padding=8)
         form.pack(fill="x", pady=(8, 0))
@@ -236,13 +247,67 @@ class ControllerWindow:
 
     def _toggle_worker(self, event) -> None:
         name = self.worker_tree.identify_row(event.y)
-        if not name or self._busy:
+        # Only the "Dùng" column toggles, so selecting a row to edit its IP changes nothing else.
+        if not name or self._busy or self.worker_tree.identify_column(event.x) != "#1":
             return
         if name in self.selected:
             self.selected.discard(name)
         else:
             self.selected.add(name)
         self._show_workers()
+
+    def edit_ip(self) -> None:
+        chosen = self.worker_tree.selection() or (self.worker_tree.focus(),)
+        name = chosen[0] if chosen and chosen[0] else None
+        if name is None:
+            messagebox.showinfo("Sửa IP", "Chọn một máy trong bảng Worker trước.", parent=self.root)
+            return
+        current = next(c for c in self.clients if c.name == name).ref.address
+        text = simpledialog.askstring(
+            "Sửa IP", f"Địa chỉ IPv4 của {name} (dòng IPv4 Address của card Wi-Fi trong ipconfig "
+                      f"trên máy đó):", initialvalue=current, parent=self.root)
+        if text is not None:
+            self.set_worker_address(name, text)
+
+    def set_worker_address(self, name: str, text: str) -> bool:
+        """Points the controller at a worker's current IP and saves it to lab.yaml."""
+        if self._busy:
+            messagebox.showerror("Sửa IP", "Đang có lượt chạy; sửa IP sau khi lượt kết thúc.",
+                                 parent=self.root)
+            return False
+        text = text.strip()
+        try:
+            ipaddress.IPv4Address(text)
+        except ValueError:
+            messagebox.showerror("Sửa IP", f"\"{text}\" không phải địa chỉ IPv4 hợp lệ "
+                                           f"(ví dụ 192.168.0.102).", parent=self.root)
+            return False
+        index = next(i for i, c in enumerate(self.clients) if c.name == name)
+        old = self.clients[index].ref
+        self.clients[index] = self.client_factory(AgentRef(name, text, old.port), self._token)
+        self.infos.pop(name, None)
+        try:
+            self._save_lab()
+        except OSError as e:
+            messagebox.showerror("Sửa IP", f"Đã đổi IP cho lần chạy này nhưng không lưu được "
+                                           f"{self.lab_path}: {e}", parent=self.root)
+        self.write_log(f"{name}: địa chỉ {old.address} → {text}.")
+        self._show_workers()
+        self.refresh_workers()
+        return True
+
+    def _save_lab(self) -> None:
+        agents = []
+        for client in self.clients:
+            entry = {"name": client.name, "address": client.ref.address}
+            if client.ref.port != DEFAULT_PORT:
+                entry["port"] = client.ref.port
+            agents.append(entry)
+        header = ("# Danh sách agent cho giao diện điều khiển LAB. Giao diện ghi lại file này khi\n"
+                  "# sửa IP (nút Sửa IP). Mỗi worker chạy: python -m gpubench agent -m <name>\n")
+        body = yaml.safe_dump({"token": self._token, "agents": agents}, allow_unicode=True,
+                              sort_keys=False)
+        self.lab_path.write_text(header + body, encoding="utf-8")
 
     def refresh_workers(self) -> None:
         def work():

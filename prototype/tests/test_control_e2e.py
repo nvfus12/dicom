@@ -283,6 +283,28 @@ class FakeTrainingTest(unittest.TestCase):
         self.assertTrue(all(st["state"] == "STOPPED" for st in statuses.values()))
         self.assertEqual(outcome(s.collect())["state"], "stopped")
 
+    def test_diem_gap_la_ip_controller_dung_khong_phai_ip_trong_file_may(self):
+        # DHCP may give rank 0 a different address than its machine file says. The controller
+        # reached the agent at the address typed in, so that is where the others must meet.
+        from dataclasses import replace
+        for name in ("sim-0", "sim-1"):
+            core = self.lab.cores[name]
+            core.machine = replace(core.machine, address="10.9.9.9")
+        s = self.lab.session(quick("ddp"))
+        s.check()
+        self.assertEqual(s.workers[0], "sim-0")
+        self.assertEqual(s.master_addr, "127.0.0.1")
+        s.request_all()
+        s.start()
+        argv = self.lab.launchers["sim-1"].calls[0][0]
+        self.assertEqual(argv[argv.index("--master-addr") + 1], "127.0.0.1")
+
+    def test_agent_khong_co_address_van_chay(self):
+        from dataclasses import replace
+        core = self.lab.cores["sim-1"]
+        core.machine = replace(core.machine, address=None)
+        self.lab.session(quick("ddp")).check()
+
     def test_khong_du_hai_may(self):
         s = RunSession(self.lab.clients[:1], validate_params(quick("ddp")), self.lab.results,
                        self.lab.quick_results, PROTOTYPE)

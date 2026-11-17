@@ -189,13 +189,13 @@ class RunSession:
                 problems.append(f"{name} đang bận (lượt {reply.get('run_id')})")
             elif not self.params.quick and not (reply.get("gpu") or {}).get("cuda_available"):
                 problems.append(f"{name} không có GPU CUDA dùng được")
-            elif not reply.get("address"):
-                problems.append(f"{name} chưa có address trong file máy")
         if problems:
             raise ProtocolError("; ".join(problems))
         self.infos = replies
         self.workers = rank_order(list(replies.values()))
-        self.master_addr = replies[self.workers[0]]["address"]
+        # The address this controller just reached rank 0 at, not the one in rank 0's machine
+        # file: DHCP may have handed out a different one since that file was written.
+        self.master_addr = self._client(self.workers[0]).ref.address
         self.run_id = new_run_id(self.params, datetime.fromtimestamp(self.clock()))
         self.on_event("checked", {"run_id": self.run_id, "workers": self.workers,
                                   "infos": replies})
