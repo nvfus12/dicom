@@ -9,7 +9,7 @@
 param(
     [Parameter(Mandatory = $true)][string]$Source,
     [string]$Machine = "",
-    [string]$Target = "C:\gpubench",
+    [string]$Target = "D:\gpubench",
     [string]$PythonVersion = "3.13.2",
     [switch]$NoTorch        # chỉ để thử script, không cài PyTorch
 )
@@ -39,7 +39,9 @@ function Find-Python {
     return $null
 }
 
-New-Item -ItemType Directory -Force $Target, "$Target\data" | Out-Null
+New-Item -ItemType Directory -Force $Target, "$Target\data", "$Target\tmp" | Out-Null
+# Keep everything off drive C: pip's temp files go to the target drive and nothing is cached.
+$env:TEMP = "$Target\tmp"; $env:TMP = "$Target\tmp"; $env:PIP_NO_CACHE_DIR = "1"
 
 Step "GPU NVIDIA"
 try {

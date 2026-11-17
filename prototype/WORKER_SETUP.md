@@ -13,7 +13,8 @@ Tài liệu này dành cho **người hoặc AI agent đang cài đặt một la
 - Không sửa gì trong `configs\` (đặc biệt `address`, `network_interface` trong file máy: đã được điền đúng cho mạng router).
 - Không cài PyTorch bản khác **2.6.0**, không nâng cấp torch, torchvision (bản 2.10 không chạy được nhiều máy trên Windows).
 - Không cài VPN, không đổi cài đặt mạng, nguồn, tường lửa khi chưa hỏi chủ máy.
-- Không chạy `run`, `netcheck`, `profile`, `controller` hay thí nghiệm nào; không xoá thư mục nào ngoài `C:\gpubench`.
+- Không chạy `run`, `netcheck`, `profile`, `controller` hay thí nghiệm nào; không xoá thư mục nào ngoài `D:\gpubench`.
+- Không ghi dữ liệu lớn vào ổ C (ổ C của các máy worker đã gần đầy): mọi thứ nằm trong `D:\gpubench`.
 
 ## Bước 0. Xác định tên máy
 
@@ -30,18 +31,27 @@ Chỉ có hai máy này tham gia. Nếu GPU khác hai dòng trên, hoặc không
 
 Ghi lại `Driver Version` và `CUDA Version` (góc trên bên phải). `CUDA Version` phải **≥ 12.4**. Nếu thấp hơn hoặc không có lệnh `nvidia-smi`: chủ máy cần cài driver NVIDIA mới nhất từ nvidia.com và khởi động lại; dừng cho tới khi xong.
 
-## Bước 1. Đặt code vào `C:\gpubench`
+## Bước 1. Kiểm tra ổ D và đặt code vào `D:\gpubench`
 
-Gói đã giải nén phải nằm ở **đúng `C:\gpubench`** (đường dẫn dài sẽ làm cài PyTorch lỗi vì giới hạn 260 ký tự của Windows). Nếu chưa:
+Mọi thứ (code, `.venv` khoảng 5 GB sau khi cài, dữ liệu, kết quả) nằm trên **ổ D**. Kiểm tra ổ D có thật và còn trống **ít nhất 8 GB**:
 
 ```bash
-Expand-Archive <đường dẫn tới gpubench-pack.zip> -DestinationPath C:\gpubench -Force
+Get-PSDrive C, D | Select-Object Name, @{n='TrongGB';e={[math]::Round($_.Free/1GB,1)}}
 ```
 
-Kiểm tra: `C:\gpubench\gpubench`, `C:\gpubench\configs\machines\<tên máy>.yaml`, `C:\gpubench\requirements.txt` đều tồn tại. Mọi lệnh sau chạy trong `C:\gpubench` (PowerShell):
+- **Không có ổ D**, hoặc ổ D trống dưới 8 GB: **dừng lại và báo người điều phối** (kèm dung lượng trống của các ổ). Không tự chuyển sang ổ C.
+- Ổ C cần trống ít nhất khoảng **0,5 GB** cho Python (nếu phải cài mới) và phần tạm nhỏ của Windows.
+
+Gói đã giải nén phải nằm ở **đúng `D:\gpubench`** (đường dẫn dài sẽ làm cài PyTorch lỗi vì giới hạn 260 ký tự của Windows). Nếu chưa:
 
 ```bash
-cd C:\gpubench
+Expand-Archive <đường dẫn tới gpubench-pack.zip> -DestinationPath D:\gpubench -Force
+```
+
+Kiểm tra: `D:\gpubench\gpubench`, `D:\gpubench\configs\machines\<tên máy>.yaml`, `D:\gpubench\requirements.txt` đều tồn tại. Mọi lệnh sau chạy trong `D:\gpubench` (PowerShell):
+
+```bash
+cd D:\gpubench
 ```
 
 ## Bước 2. Chọn Python
@@ -50,11 +60,19 @@ cd C:\gpubench
 py -0p
 ```
 
-Cần một bản **3.10, 3.11, 3.12 hoặc 3.13** (64-bit). Ưu tiên 3.13 hoặc 3.12. **Không dùng 3.14** (chưa có PyTorch 2.6.0). Nếu không có bản phù hợp: cài Python 3.13 từ python.org (bản Windows 64-bit, cho người dùng hiện tại). Dưới đây giả sử dùng `py -3.13`; thay số phiên bản nếu khác.
+Cần một bản **3.10, 3.11, 3.12 hoặc 3.13** (64-bit). Ưu tiên 3.13 hoặc 3.12. **Không dùng 3.14** (chưa có PyTorch 2.6.0). Nếu không có bản phù hợp: cài Python 3.13 từ python.org (bản Windows 64-bit, cho người dùng hiện tại; chiếm khoảng 100 MB). Nếu ổ C quá đầy, chọn "Customize installation" và đặt thư mục cài là `D:\Python313`. Dưới đây giả sử dùng `py -3.13`; thay số phiên bản nếu khác.
 
 ## Bước 3. Tạo môi trường và cài thư viện (tải khoảng 2,5 GB)
 
 Luôn gọi thẳng `.\.venv\Scripts\python.exe`; không dùng `activate` (Windows có thể chặn chạy script).
+
+Mặc định pip giữ một bản sao file tải về (PyTorch khoảng 2,5 GB) trong bộ nhớ đệm trên **ổ C** và giải nén qua thư mục tạm trên ổ C. Trong **cùng cửa sổ PowerShell** sẽ chạy các lệnh cài, chuyển cả hai sang ổ D trước:
+
+```bash
+New-Item -ItemType Directory -Force D:\gpubench\tmp | Out-Null; $env:TEMP = "D:\gpubench\tmp"; $env:TMP = "D:\gpubench\tmp"; $env:PIP_NO_CACHE_DIR = "1"
+```
+
+Nếu đóng cửa sổ PowerShell giữa chừng, chạy lại lệnh trên trước khi cài tiếp.
 
 ```bash
 py -3.13 -m venv .venv
@@ -86,7 +104,7 @@ Kiểm tra:
 .\.venv\Scripts\python.exe -c "from torchvision import datasets; datasets.CIFAR10('data', download=True); datasets.CIFAR10('data', train=False, download=True)"
 ```
 
-Dữ liệu phải nằm trong `C:\gpubench\data` (file máy dùng `data_dir: ./data`). Bị ngắt giữa chừng thì chạy lại; lần chạy lại thành công in `Files already downloaded and verified`.
+Dữ liệu phải nằm trong `D:\gpubench\data` (file máy dùng `data_dir: ./data`). Bị ngắt giữa chừng thì chạy lại; lần chạy lại thành công in `Files already downloaded and verified`.
 
 ## Bước 5. Kiểm tra tổng thể
 
@@ -137,6 +155,7 @@ Gửi bảng này (kèm ảnh chụp `nvidia-smi` và kết quả `gpubench chec
 | Mục | Giá trị |
 |---|---|
 | Tên máy | |
+| Dung lượng trống ổ C / ổ D (sau khi cài) | |
 | GPU, Driver Version, CUDA Version | |
 | Python dùng cho `.venv` | |
 | `torch.__version__`, `cuda.is_available()` | |
