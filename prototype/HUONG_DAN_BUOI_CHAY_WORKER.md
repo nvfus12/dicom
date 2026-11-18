@@ -13,7 +13,9 @@ Dành cho chủ hai máy worker. Người điều phối làm mọi việc còn 
 
 ## 1. Cập nhật code (khi người điều phối gửi gói mới; mạng nào cũng được)
 
-Đặt `gpubench-pack.zip` vào Downloads, rồi giải nén **đè** lên thư mục cũ. `.venv` và dữ liệu giữ nguyên, không cài lại gì.
+**Đóng cửa sổ agent trước** (nếu đang mở): agent đang chạy vẫn dùng code cũ cho tới khi mở lại.
+
+Đặt `gpubench-pack.zip` vào Downloads, rồi giải nén **đè** lên thư mục cũ. Lệnh chỉ ghi đè các file có trong gói: `.venv`, dataset (`data\`), kết quả và log (`results\`) giữ nguyên, không cài lại gì. File cấu hình máy (`configs\machines\`) trở về bản trong gói; không sao, vì IP giờ được nhập trên giao diện của người điều phối.
 
 `trinh-duc`:
 
