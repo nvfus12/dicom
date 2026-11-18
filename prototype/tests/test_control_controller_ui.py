@@ -178,6 +178,34 @@ class ControllerWindowTest(unittest.TestCase):
             self.win.edit_ip_button.invoke()
         self.assertEqual(self.address_of("doan-tuan"), "192.168.0.103")
 
+    def log_text(self):
+        return self.win.log.get("1.0", "end")
+
+    def test_kiem_tra_mang_tu_start_sau_khi_dong_y(self):
+        self.win.netcheck_button.invoke()
+        s = self.session()
+        self.assertEqual(s.params.mode, "netcheck")
+        self.assertTrue(pump_until(self.win.root, lambda: "collect" in s.calls, timeout=15))
+        self.assertEqual(s.calls[:3], ["check", "request_all", "start"])   # no Start click needed
+        self.assertTrue(pump_until(self.win.root, lambda: "Kiểm tra mạng xong" in self.log_text()))
+        self.assertTrue(pump_until(self.win.root,
+                                   lambda: str(self.win.netcheck_button["state"]) == "normal"))
+
+    def test_kiem_tra_mang_bi_tu_choi_thi_khong_chay(self):
+        FakeSession.approve = False
+        self.win.netcheck_button.invoke()
+        s = self.session()
+        self.assertTrue(pump_until(self.win.root, lambda: "request_all" in s.calls))
+        self.win.root.update()
+        self.assertNotIn("start", s.calls)
+
+    def test_dong_loi_co_nghia_hien_trong_nhat_ky(self):
+        self.win._on_event("failure_detail", {"machine": "doan-tuan",
+                                              "excerpt": "Unhandled exception caught\n  [frame] c10d::X"})
+        self.assertTrue(pump_until(self.win.root, lambda: "Unhandled exception caught" in self.log_text()))
+        self.assertIn("doan-tuan", self.log_text())
+        self.assertIn("[frame] c10d::X", self.log_text())
+
     def test_h_chi_bat_khi_local_sgd(self):
         self.win.mode_var.set("ddp")
         self.win.root.update()

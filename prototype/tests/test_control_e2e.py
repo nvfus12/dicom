@@ -26,6 +26,7 @@ from gpubench.control.controller_core import (AgentClient, AgentRef, RunSession,
                                               load_lab)
 from gpubench.control.protocol import ProtocolError, validate_params  # noqa: E402
 from test_control_agent import PROTOTYPE, FakeLauncher, make_configs, write_events  # noqa: E402
+from test_control_protocol import NATIVE_CRASH  # noqa: E402
 
 TOKEN = "e2e-token"
 
@@ -123,6 +124,25 @@ class FullRunTest(unittest.TestCase):
 
     def test_chay_thu_sync_tron_vong(self):
         self.run_mode("sync")
+
+    def test_kiem_tra_mang_tron_vong(self):
+        s = self.lab.session({"mode": "netcheck"})
+        s.check()                                  # no CUDA needed for a network check
+        self.assertTrue(s.run_id.startswith("lab-netcheck-"))
+        self.assertTrue(all(d == "allow" for d, _ in s.request_all().values()))
+        s.start()
+        statuses = poll_until_done(s, timeout=180)
+        self.assertTrue(all(st["state"] == "FINISHED" for st in statuses.values()), statuses)
+        run_dir = s.collect()
+        self.assertEqual(run_dir.parent, self.lab.results)          # part of the lab report
+        self.assertEqual(outcome(run_dir)["state"], "finished")
+        summary = "\n".join(controller_core.netcheck_summary(run_dir))
+        self.assertIn("sim-0<->sim-1", summary)
+        self.assertIn("sim-0->sim-1", summary)
+        self.assertIn("MB/s", summary)
+        report = s.analyze()
+        self.assertTrue((report / "network.csv").is_file())
+        self.assertIn(s.run_id, (report / "network.csv").read_text("utf-8"))
 
     def test_chu_may_dung_giua_chung(self):
         s = self.lab.session(quick("ddp", max_epochs=300, max_train_minutes=2))
@@ -275,6 +295,23 @@ class FakeTrainingTest(unittest.TestCase):
         self.assertFalse(s.done(s.poll_once()))
         now[0] += controller_core.STOPPING_GRACE_S + 1
         self.assertTrue(s.done(s.poll_once()))
+
+    def test_hong_som_van_gom_log_va_bao_dong_loi(self):
+        for launcher in self.lab.launchers.values():
+            launcher.log_text = NATIVE_CRASH
+        s = self.started()
+        for launcher in self.lab.launchers.values():
+            launcher.process.exit_code = 3
+        self.assertTrue(s.done(s.poll_once()))
+        run_dir = s.collect()
+        self.assertTrue((run_dir / "agent-sim-0.log").is_file())
+        self.assertTrue((run_dir / "agent-sim-1.log").is_file())
+        self.assertEqual(json.loads((run_dir / "controller.json").read_text("utf-8"))["missing"], [])
+        details = [d for kind, d in self.lab.events if kind == "failure_detail"]
+        self.assertEqual(sorted(d["machine"] for d in details), ["sim-0", "sim-1"])
+        self.assertIn("Unhandled exception caught", details[0]["excerpt"])
+        self.assertNotIn("THPGenerator", details[0]["excerpt"])
+        self.assertIn("Unhandled exception caught", outcome(run_dir)["reason"])
 
     def test_dung_tu_controller(self):
         s = self.started()

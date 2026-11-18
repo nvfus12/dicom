@@ -18,8 +18,9 @@ APPROVAL_VALID_S = 600              # an approval covers one run_id for this lon
 POLL_INTERVAL_S = 3
 AGENT_VERSION = "1.0"
 
-MODES = ("ddp", "localsgd", "sync")
-MODE_LABELS = {"ddp": "DDP", "localsgd": "Local SGD", "sync": "Sync (all-reduce thủ công)"}
+MODES = ("ddp", "localsgd", "sync", "netcheck")
+MODE_LABELS = {"ddp": "DDP", "localsgd": "Local SGD", "sync": "Sync (all-reduce thủ công)",
+               "netcheck": "Kiểm tra mạng (khoảng 1–2 phút, không dùng GPU)"}
 REAL_DATASETS = ("cifar10",)
 REAL_MODELS = ("resnet20", "resnet18")
 QUICK_DATASETS = ("synthetic",)
@@ -82,6 +83,8 @@ def validate_params(data: Any) -> RunParams:
     quick = merged["quick"]
     if not isinstance(quick, bool):
         raise ProtocolError(f"'quick' phải là true/false, nhận {quick!r}")
+    if merged["mode"] == "netcheck" and quick:
+        raise ProtocolError("Kiểm tra mạng không có chế độ chạy thử")
     return RunParams(
         mode=_choice(merged, "mode", MODES),
         dataset=_choice(merged, "dataset", QUICK_DATASETS if quick else REAL_DATASETS),
@@ -101,7 +104,8 @@ def build_experiment(params: RunParams, workers: list[str], run_id: str) -> dict
     local = params.mode == "localsgd"
     data: dict[str, Any] = {
         "name": run_id,
-        "mode": params.mode,
+        # netcheck only needs a valid distributed experiment for its workers, port and timeout
+        "mode": "sync" if params.mode == "netcheck" else params.mode,
         "workers": list(workers),
         "model": params.model,
         "dataset": params.dataset,
@@ -136,6 +140,8 @@ def valid_run_id(value: Any) -> bool:
 
 
 def new_run_id(params: RunParams, now: datetime) -> str:
+    if params.mode == "netcheck":
+        return f"lab-netcheck-{now:%Y%m%d-%H%M%S}"
     prefix = "thu" if params.quick else "lab"
     return f"{prefix}-{params.mode}-{params.model}-{now:%Y%m%d-%H%M%S}"
 
@@ -150,6 +156,8 @@ def rank_order(infos: list[dict]) -> list[str]:
 
 def describe_params(params: RunParams) -> list[tuple[str, str]]:
     """Label/value rows for the owner's dialog."""
+    if params.mode == "netcheck":
+        return [("Chế độ", MODE_LABELS["netcheck"])]
     rows = [("Chế độ", MODE_LABELS[params.mode]),
             ("Model", "Tiny CNN (chạy thử)" if params.quick else params.model),
             ("Dataset", "Dữ liệu tổng hợp (chạy thử)" if params.quick else "CIFAR-10")]
@@ -158,3 +166,22 @@ def describe_params(params: RunParams) -> list[tuple[str, str]]:
     rows.append(("Thời gian tối đa", f"{params.max_train_minutes:g} phút"))
     rows.append(("Epoch tối đa", str(params.max_epochs)))
     return rows
+
+
+_FRAME = re.compile(r"^\s*[0-9A-Fa-f]{12,}")
+_USEFUL_FRAME = re.compile(r"c10d::|gloo", re.IGNORECASE)
+
+
+def log_excerpt(text: str, max_lines: int = 30) -> str:
+    """The lines of a training log worth reading. On Windows a crash inside PyTorch prints a
+    native stack trace of hundreds of address lines and no message; keep the messages, the
+    warnings, and only the frames that name the distributed step that failed."""
+    kept: list[str] = []
+    for line in text.splitlines():
+        if _FRAME.match(line):
+            if not _USEFUL_FRAME.search(line):
+                continue
+            line = "  [frame] " + line.split(" ", 1)[-1].split(" [<unknown file>", 1)[0].strip()
+        if line.strip() and (not kept or kept[-1] != line):
+            kept.append(line)
+    return "\n".join(kept[-max_lines:])

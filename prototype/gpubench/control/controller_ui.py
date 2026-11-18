@@ -20,7 +20,7 @@ from typing import Callable
 from ..app.config_loader import PROJECT_DIR
 import yaml
 
-from .controller_core import AgentClient, AgentRef, RunSession, load_lab
+from .controller_core import AgentClient, AgentRef, RunSession, load_lab, netcheck_summary
 from .protocol import DEFAULT_PORT, MODE_LABELS, POLL_INTERVAL_S, ProtocolError, RunParams, rank_order, validate_params
 
 DATASETS = {"CIFAR-10": "cifar10"}
@@ -153,6 +153,8 @@ class ControllerWindow:
         self.start_button.pack(side="left", padx=8)
         self.stop_button = ttk.Button(actions, text="Dừng", command=self.stop_run, state="disabled")
         self.stop_button.pack(side="left")
+        self.netcheck_button = ttk.Button(actions, text="Kiểm tra mạng", command=self.run_netcheck)
+        self.netcheck_button.pack(side="left", padx=(24, 0))
 
         self.mode_var.trace_add("write", lambda *_: self._sync_form())
         self.quick_var.trace_add("write", lambda *_: self._sync_form())
@@ -235,6 +237,10 @@ class ControllerWindow:
             word = "ĐỒNG Ý" if data["decision"] == "allow" else "TỪ CHỐI"
             text = f"{data['machine']}: {word}" + (f" ({data['reason']})" if data.get("reason") else "")
             self._post(lambda: self.write_log(text))
+        elif kind == "failure_detail":
+            lines = [f"Log lỗi của {data['machine']}:"] + [
+                f"    {line}" for line in (data.get("excerpt") or "(trống)").splitlines()]
+            self._post(lambda: [self.write_log(line) for line in lines])
         elif kind in ("stopping", "analyze_failed", "collect_failed", "stop_failed", "resume_missing"):
             text = {"stopping": lambda: f"Dừng lượt: {data['reason']}",
                     "analyze_failed": lambda: f"Phân tích lỗi: {data['output'][-500:]}",
@@ -360,6 +366,7 @@ class ControllerWindow:
 
     def _set_buttons(self, send: bool, start: bool, stop: bool) -> None:
         self.send_button.configure(state="normal" if send else "disabled")
+        self.netcheck_button.configure(state="normal" if send else "disabled")
         self.start_button.configure(state="normal" if start else "disabled")
         self.stop_button.configure(state="normal" if stop else "disabled")
 
@@ -371,6 +378,14 @@ class ControllerWindow:
         except ProtocolError as e:
             messagebox.showerror("Tham số không hợp lệ", str(e), parent=self.root)
             return
+        self._send(params)
+
+    def run_netcheck(self) -> None:
+        """Measures the network between the selected workers. Owners still approve it; it starts
+        by itself once everyone has, since there is nothing to configure."""
+        self._send(validate_params({"mode": "netcheck"}), auto_start=True)
+
+    def _send(self, params: RunParams, auto_start: bool = False) -> None:
         clients = [c for c in self.clients if c.name in self.selected]
         if len(clients) < 2:
             messagebox.showerror("Chưa đủ máy", "Cần chọn ít nhất 2 máy.", parent=self.root)
@@ -382,7 +397,10 @@ class ControllerWindow:
         self._busy = True
         self._set_buttons(False, False, False)
         mode = MODE_LABELS[params.mode] + (f", H={params.local_steps}" if params.mode == "localsgd" else "")
-        self.write_log(f"Gửi yêu cầu: {mode}, {params.model}" + (" (chạy thử)" if params.quick else ""))
+        if params.mode == "netcheck":
+            self.write_log(f"Gửi yêu cầu: {mode}")
+        else:
+            self.write_log(f"Gửi yêu cầu: {mode}, {params.model}" + (" (chạy thử)" if params.quick else ""))
 
         def work():
             try:
@@ -393,7 +411,7 @@ class ControllerWindow:
             except Exception as e:
                 self._post(lambda: self._request_failed(str(e)))
                 return
-            self._post(lambda: self._request_done(session))
+            self._post(lambda: self._request_done(session, auto_start))
         self._background(work)
 
     def _release_unstarted(self, wait_s: float = 0) -> None:
@@ -414,11 +432,14 @@ class ControllerWindow:
         self._set_buttons(True, False, False)
         messagebox.showerror("Không gửi được yêu cầu", message, parent=self.root)
 
-    def _request_done(self, session) -> None:
+    def _request_done(self, session, auto_start: bool = False) -> None:
         self._busy = False
         if session is not self.session:
             return
-        if session.approved:
+        if session.approved and auto_start:
+            self.write_log("Mọi máy đã đồng ý; bắt đầu ngay.")
+            self.start_run()
+        elif session.approved:
             self.write_log("Mọi máy đã đồng ý. Bấm Start để bắt đầu.")
             self._set_buttons(True, True, False)
         else:
@@ -495,6 +516,11 @@ class ControllerWindow:
     def _run_done(self, run_dir: Path, report: Path | None) -> None:
         self._busy = False
         self.write_log(f"Đã gom kết quả vào {run_dir}.")
+        if self.session is not None and self.session.params.mode == "netcheck":
+            summary = netcheck_summary(run_dir)
+            self.write_log("Kiểm tra mạng xong." + ("" if summary else " Không có số đo (xem log lỗi ở trên)."))
+            for line in summary:
+                self.write_log(f"    {line}")
         if report is not None:
             self.write_log(f"Đã phân tích, báo cáo ở {report}.")
             self.load_results_table()

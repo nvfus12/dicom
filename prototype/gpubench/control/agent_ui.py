@@ -182,6 +182,8 @@ class AgentWindow:
 
     def _status_text(self, state: str) -> str:
         run_id, params = self.core.run_id, self.core.params
+        if state == "RUNNING" and params is not None and params.mode == "netcheck":
+            return "Đang kiểm tra mạng với máy khác (khoảng 1–2 phút, không dùng GPU)"
         if state == "RUNNING" and params is not None:
             status = self.core.status(run_id)
             epoch = status["epoch"] or 0

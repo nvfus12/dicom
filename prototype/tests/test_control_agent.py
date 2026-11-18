@@ -15,9 +15,11 @@ import zipfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))   # shared log samples in test_control_protocol
 
 from gpubench.control import agent_core, protocol  # noqa: E402
 from gpubench.control.agent_core import AgentCore, AgentError  # noqa: E402
+from test_control_protocol import NATIVE_CRASH  # noqa: E402
 
 PROTOTYPE = Path(__file__).resolve().parents[1]
 RUN = "thu-localsgd-tiny_cnn-20261116-100000"
@@ -63,14 +65,15 @@ class FakeProcess:
 
 
 class FakeLauncher:
-    def __init__(self):
+    def __init__(self, log_text: str = "nhật ký huấn luyện\n"):
         self.calls = []
         self.process = FakeProcess()
+        self.log_text = log_text
 
     def __call__(self, argv, cwd, log_path):
         self.calls.append((argv, cwd, log_path))
         log_path.parent.mkdir(parents=True, exist_ok=True)
-        log_path.write_text("nhật ký huấn luyện\n", encoding="utf-8")
+        log_path.write_text(self.log_text, encoding="utf-8")
         return self.process
 
 
@@ -286,6 +289,38 @@ class AgentCoreTest(unittest.TestCase):
         names = zipfile.ZipFile(io.BytesIO(self.core.results_zip(RUN))).namelist()
         self.assertIn("rank1-sim-1.jsonl", names)
         self.assertIn("agent-sim-1.log", names)
+
+    def test_results_khi_hong_truoc_luc_huan_luyen_van_co_log(self):
+        # A run that dies before the trainer creates its folder still has the agent's log.
+        self.request()
+        self.start()
+        self.launcher.process.exit_code = 1
+        self.assertEqual(self.core.status(RUN)["state"], "FAILED")
+        names = zipfile.ZipFile(io.BytesIO(self.core.results_zip(RUN))).namelist()
+        self.assertEqual(names, ["agent-sim-1.log"])
+
+    def test_loi_la_cac_dong_co_nghia_khong_phai_stack_trace(self):
+        self.launcher.log_text = NATIVE_CRASH
+        self.request()
+        self.start()
+        self.launcher.process.exit_code = 3
+        error = self.core.status(RUN)["error"]
+        self.assertIn("Unhandled exception caught", error)
+        self.assertIn("failed to connect", error)
+        self.assertNotIn("THPGenerator", error)
+
+    def test_netcheck_chay_lenh_netcheck_va_xong_khi_thoat_0(self):
+        params = {"mode": "netcheck"}
+        run_id = "lab-netcheck-20261118-090000"
+        self.request(run_id=run_id, params=params)
+        self.core.start({"run_id": run_id, "params": params, "workers": WORKERS,
+                         "master_addr": "127.0.0.1"})
+        argv = self.launcher.calls[0][0]
+        self.assertEqual(argv[1:6], ["-m", "gpubench", "netcheck", "-m", "sim-1"])
+        self.assertEqual(argv[argv.index("--run-id") + 1], run_id)
+        self.assertEqual(argv[argv.index("--results-dir") + 1], str(self.results))
+        self.launcher.process.exit_code = 0
+        self.assertEqual(self.core.status(run_id)["state"], "FINISHED")
 
     def test_results_zip_khong_co(self):
         with self.assertRaises(AgentError) as caught:

@@ -108,7 +108,7 @@ def parse_tailscale_ping(text: str) -> dict:
 
 def run_netcheck(machine_name: str, spec: ExperimentSpec, master_addr: str | None = None,
                  configs_dir: Path = CONFIGS_DIR,
-                 results_dir: Path = RESULTS_DIR) -> dict:
+                 results_dir: Path = RESULTS_DIR, run_id: str | None = None) -> dict:
     if spec.world_size < 2:
         raise ConfigError("netcheck cần thí nghiệm có ít nhất 2 workers")
     machine = load_machine(machine_name, configs_dir)
@@ -122,7 +122,7 @@ def run_netcheck(machine_name: str, spec: ExperimentSpec, master_addr: str | Non
     comm = GlooComm(master, spec.master_port, rank, spec.world_size, spec.timeout_s)
     sink = None
     try:
-        run_id = comm.broadcast_object(f"netcheck-{time.strftime('%Y%m%d-%H%M%S')}")
+        run_id = comm.broadcast_object(run_id or f"netcheck-{time.strftime('%Y%m%d-%H%M%S')}")
         sink = JsonlSink(results_dir / run_id / f"rank{rank}-{machine.name}.jsonl")
 
         peers = {}

@@ -26,13 +26,12 @@ import yaml
 
 from ..app.config_loader import CONFIGS_DIR, PROJECT_DIR, RESULTS_DIR, load_machine
 from .protocol import (AGENT_VERSION, APPROVAL_VALID_S, ProtocolError, RunParams, build_experiment,
-                       valid_run_id, validate_params)
+                       log_excerpt, valid_run_id, validate_params)
 
 Approver = Callable[[dict], "tuple[str, str]"]
 Launcher = Callable[[list, Path, Path], Any]
 
 FREE_STATES = ("IDLE", "FINISHED", "FAILED", "STOPPED")
-ERROR_TAIL_CHARS = 2000
 
 
 class AgentError(Exception):
@@ -230,7 +229,8 @@ class AgentCore:
             experiment = runs_dir / f"{run_id}.yaml"
             experiment.write_text(yaml.safe_dump(build_experiment(params, workers, run_id),
                                                  allow_unicode=True, sort_keys=True), encoding="utf-8")
-            argv = [sys.executable, "-m", "gpubench", "run", "-m", self.name, "-e", str(experiment),
+            command = "netcheck" if params.mode == "netcheck" else "run"
+            argv = [sys.executable, "-m", "gpubench", command, "-m", self.name, "-e", str(experiment),
                     "--run-id", run_id, "--master-addr", master_addr,
                     "--results-dir", str(self._results_dir)]
             self._process = self._launcher(argv, self._project_dir, self._log_path(run_id))
@@ -257,7 +257,8 @@ class AgentCore:
         self._exit_code = code
         if self._stopped_by:
             self._state = "STOPPED"
-        elif code == 0 and read_progress(self._jsonl_path(self._run_id))["finished"]:
+        elif code == 0 and (self._params.mode == "netcheck"      # netcheck has no train_end
+                            or read_progress(self._jsonl_path(self._run_id))["finished"]):
             self._state = "FINISHED"
         else:
             self._state = "FAILED"
@@ -274,13 +275,16 @@ class AgentCore:
             progress = read_progress(self._jsonl_path(run_id))
             error = progress["error"]
             if error is None and self._state == "FAILED":
+                # No traceback from the trainer: use the meaningful lines of the process log
+                # (a native crash prints hundreds of address lines and no message).
                 log = self._log_path(run_id)
-                error = log.read_text(encoding="utf-8", errors="replace") if log.is_file() else None
+                text = log.read_text(encoding="utf-8", errors="replace") if log.is_file() else ""
+                error = log_excerpt(text) or None
             return {"state": self._state, "run_id": run_id, "machine": self.name,
                     "epoch": progress["epoch"], "step": progress["step"],
                     "test_acc": progress["test_acc"], "points": progress["points"],
                     "total_epochs": progress["total_epochs"], "exit_code": self._exit_code,
-                    "error": error[-ERROR_TAIL_CHARS:] if error else None,
+                    "error": log_excerpt(error) if error else None,
                     "stopped_by": self._stopped_by}
 
     def stop(self, run_id: str, reason: str, by: str) -> dict:
@@ -308,15 +312,16 @@ class AgentCore:
     def results_zip(self, run_id: str) -> bytes:
         self._check_run_id(run_id)
         run_dir = self._results_dir / run_id
+        log = self._log_path(run_id)
+        # A run that died before the trainer made its folder still has the process log.
         if (run_id not in self._started_runs or run_dir.resolve().parent != self._results_dir.resolve()
-                or not run_dir.is_dir()):
+                or not (run_dir.is_dir() or log.is_file())):
             raise AgentError(404, f"Máy '{self.name}' không có kết quả của lượt {run_id}")
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
-            for path in sorted(run_dir.rglob("*")):
+            for path in sorted(run_dir.rglob("*")) if run_dir.is_dir() else []:
                 if path.is_file():
                     archive.write(path, path.relative_to(run_dir).as_posix())
-            log = self._log_path(run_id)
             if log.is_file():
                 archive.write(log, f"agent-{self.name}.log")
         return buffer.getvalue()

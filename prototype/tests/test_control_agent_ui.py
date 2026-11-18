@@ -139,6 +139,16 @@ class AgentWindowTest(unittest.TestCase):
         self.run_training()
         self.assertIn("Đang được dùng để huấn luyện", self.app.status_label.cget("text"))
 
+    def test_kiem_tra_mang_hien_dung_trang_thai(self):
+        params = {"mode": "netcheck"}
+        reply = self.ask(params)
+        self.answer("Cho phép", reply)
+        self.app.core.start({"run_id": RUN, "params": params, "workers": WORKERS,
+                             "master_addr": "127.0.0.1"})
+        self.assertTrue(pump_until(self.app.root,
+                                   lambda: "kiểm tra mạng" in self.app.status_label.cget("text")))
+        self.assertNotIn("epoch", self.app.status_label.cget("text"))
+
     def test_nut_dung_goi_stop_owner(self):
         self.run_training()
         with mock.patch.object(agent_ui.messagebox, "askyesno", return_value=True):

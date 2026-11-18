@@ -141,7 +141,8 @@ def cmd_netcheck(args) -> int:
     from .app.netcheck import run_netcheck
 
     spec = load_experiment(args.experiment, parse_overrides(args.set))
-    run_netcheck(args.machine, spec, master_addr=args.master_addr)
+    extra = {"results_dir": Path(args.results_dir)} if args.results_dir else {}
+    run_netcheck(args.machine, spec, master_addr=args.master_addr, run_id=args.run_id, **extra)
     return 0
 
 
@@ -222,6 +223,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--machine", "-m", required=True)
     experiment_args(p)
     p.add_argument("--master-addr", default=None, help="IP của máy rank 0")
+    p.add_argument("--run-id", default=None, help="mặc định: netcheck-<thời gian> do rank 0 đặt")
+    p.add_argument("--results-dir", default=None, help=f"mặc định: {RESULTS_DIR}")
     p.set_defaults(func=cmd_netcheck)
 
     p = sub.add_parser("agent", help="chạy agent LAB trên worker (cửa sổ xin phép, nhận lượt chạy)")

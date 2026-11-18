@@ -68,6 +68,10 @@ Runs a whole training run from one window on the coordinator, without typing com
 
 "Chạy thử nhanh" (quick run) trains a tiny CNN on synthetic data for a minute or two to check the network and setup; its results go to `results-thu/` and are analysed separately into `results-thu/report-thu/`, never mixed with the lab report.
 
+"Kiểm tra mạng" (network check) asks the owners for approval like a run, then makes every agent run `gpubench netcheck` against the rank-0 address typed in the controller; latency, throughput and all-reduce time appear in the log and in `results/report-lab/network.csv`.
+
+When a run fails, every agent's full process log is collected into the run folder (`agent-<machine>.log`), even if training never started, and the controller log shows its meaningful lines: on Windows a crash inside PyTorch prints hundreds of native stack frames and no message.
+
 How it behaves when things go wrong:
 - The agent never runs commands it receives; it only accepts named parameters from an allow-list and runs `gpubench run` with them.
 - An owner can stop training at any time from the agent window; the controller then stops every other worker and records who stopped the run.

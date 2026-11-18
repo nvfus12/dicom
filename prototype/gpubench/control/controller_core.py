@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import socket
 import subprocess
 import sys
@@ -25,7 +26,7 @@ from typing import Callable
 import yaml
 
 from .protocol import (APPROVAL_TIMEOUT_S, DEFAULT_PORT, TOKEN_HEADER, ProtocolError, RunParams,
-                       new_run_id, rank_order, valid_run_id, validate_params)
+                       log_excerpt, new_run_id, rank_order, valid_run_id, validate_params)
 
 FREE_STATES = ("IDLE", "FINISHED", "FAILED", "STOPPED")
 DONE_STATES = ("FINISHED", "FAILED", "STOPPED", "LOST")
@@ -35,6 +36,40 @@ UNREACHABLE_LIMIT_S = 360
 STOPPING_GRACE_S = 60
 ANALYZE_ACC = ["0.5", "0.6", "0.7", "0.8"]
 ANALYZE_MINUTES = ["10", "30"]
+
+
+def _error_line(error: str) -> str:
+    """The one line of an error excerpt that best says what went wrong."""
+    lines = [line.strip() for line in error.splitlines() if line.strip()]
+    if not lines:
+        return "không rõ nguyên nhân"
+    messages = [line for line in lines if re.search(r"Error|Exception|exception", line)
+                and not line.startswith("[frame]")]
+    frames = [line for line in lines if line.startswith("[frame]")]
+    line = messages[-1] if messages else lines[-1]
+    if frames and not line.startswith("[frame]"):
+        line += f" (tại {frames[-1][len('[frame]'):].strip()})"
+    return line
+
+
+def netcheck_summary(run_dir: Path) -> list[str]:
+    """Readable lines from a netcheck run's logs: latency, throughput and all-reduce time."""
+    latency, rates, allreduce = {}, {}, {}
+    for path in sorted(run_dir.glob("rank*.jsonl")):
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if record.get("event") == "pairs":
+                latency.update(record.get("latency_ms") or {})
+                rates.update(record.get("mb_per_s") or {})
+            elif record.get("event") == "allreduce":
+                allreduce.update(record.get("seconds_median") or {})
+    lines = [f"Độ trễ khứ hồi {pair}: {ms:.2f} ms" for pair, ms in sorted(latency.items())]
+    lines += [f"Thông lượng {pair}: {mb:.2f} MB/s (~{mb * 8:.0f} Mbit/s)" for pair, mb in sorted(rates.items())]
+    lines += [f"All-reduce {size}: {sec:.4f} s" for size, sec in allreduce.items()]
+    return lines
 
 
 class AgentUnavailable(Exception):
@@ -187,7 +222,8 @@ class RunSession:
                 problems.append(str(reply))
             elif reply.get("state") not in FREE_STATES:
                 problems.append(f"{name} đang bận (lượt {reply.get('run_id')})")
-            elif not self.params.quick and not (reply.get("gpu") or {}).get("cuda_available"):
+            elif (not self.params.quick and self.params.mode != "netcheck"
+                  and not (reply.get("gpu") or {}).get("cuda_available")):
                 problems.append(f"{name} không có GPU CUDA dùng được")
         if problems:
             raise ProtocolError("; ".join(problems))
@@ -271,8 +307,7 @@ class RunSession:
             if who == "agent":
                 return f"Agent trên {name} đã bị đóng"
             return f"{name} đã dừng"
-        lines = [line for line in (status.get("error") or "").splitlines() if line.strip()]
-        return f"{name} gặp lỗi: {lines[-1] if lines else 'không rõ nguyên nhân'}"
+        return f"{name} gặp lỗi: {_error_line(status.get('error') or '')}"
 
     def poll_once(self) -> dict[str, dict]:
         def ask(client: AgentClient):
@@ -340,6 +375,11 @@ class RunSession:
             state = "stopped"
         else:
             state = "failed"
+        for name, status in self.last_statuses.items():
+            log = self.run_dir / f"agent-{name}.log"
+            if status["state"] in ("FAILED", "LOST") and log.is_file():
+                excerpt = log_excerpt(log.read_text(encoding="utf-8", errors="replace"))
+                self.on_event("failure_detail", {"machine": name, "excerpt": excerpt})
         reason = self.stop_reason or next(
             (self._reason(n, s) for n, s in self.last_statuses.items() if s["state"] != "FINISHED"), "")
         self._write_record(missing=sorted(missing), outcome={

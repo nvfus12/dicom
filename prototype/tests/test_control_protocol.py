@@ -111,5 +111,69 @@ class RunIdAndRankTest(unittest.TestCase):
         self.assertNotIn("Đồng bộ mỗi (H)", ddp)
 
 
+NATIVE_CRASH = """[doan-tuan] rank 0/2, chờ các máy khác tại 192.168.0.102:29500 ...
+[W1117 16:03:59.000000000 socket.cpp:759] [c10d] The client socket has failed to connect to [LAPTOP-X]:29500 (system error: 10049 - The requested address is not valid in its context.).
+Unhandled exception caught in c10/util/AbortHandler.h
+00007FF8B6F194E400007FF8B6EF6170 torch_python.dll!THPGenerator_initDefaultGenerator [<unknown file> @ <unknown line number>]
+00007FF9723B218700007FF9723B2170 ucrtbase.dll!terminate [<unknown file> @ <unknown line number>]
+00007FF94FED1AB1 <unknown symbol address> VCRUNTIME140_1.dll!<unknown symbol> [<unknown file> @ <unknown line number>]
+00007FFF99CA7CCF00007FFF99CA7910 torch_cpu.dll!c10d::ProcessGroupGloo::ProcessGroupGloo [<unknown file> @ <unknown line number>]
+"""
+
+PY_TRACEBACK = """[sim-0] rank 0/2, chờ các máy khác tại 127.0.0.1:29500 ...
+Traceback (most recent call last):
+  File "x.py", line 3, in <module>
+    main()
+RuntimeError: Gloo connectFullMesh failed
+"""
+
+
+class LogExcerptTest(unittest.TestCase):
+    def test_bo_dong_stack_trace_giu_dong_co_nghia(self):
+        text = protocol.log_excerpt(NATIVE_CRASH)
+        self.assertIn("failed to connect", text)
+        self.assertIn("Unhandled exception caught", text)
+        self.assertIn("ProcessGroupGloo::ProcessGroupGloo", text)   # the frame that names the failing step
+        self.assertNotIn("THPGenerator_initDefaultGenerator", text)
+        self.assertNotIn("<unknown symbol>", text)
+
+    def test_giu_nguyen_traceback_python(self):
+        text = protocol.log_excerpt(PY_TRACEBACK)
+        self.assertIn("Traceback (most recent call last)", text)
+        self.assertIn("RuntimeError: Gloo connectFullMesh failed", text)
+
+    def test_gioi_han_so_dong(self):
+        text = protocol.log_excerpt("\n".join(f"dòng {i}" for i in range(500)), max_lines=10)
+        self.assertEqual(len(text.splitlines()), 10)
+        self.assertIn("dòng 499", text)
+
+    def test_log_rong(self):
+        self.assertEqual(protocol.log_excerpt(""), "")
+
+
+class NetcheckParamsTest(unittest.TestCase):
+    def test_netcheck_hop_le_va_khong_phai_chay_thu(self):
+        p = protocol.validate_params({"mode": "netcheck"})
+        self.assertEqual((p.mode, p.quick), ("netcheck", False))
+        with self.assertRaises(protocol.ProtocolError):
+            protocol.validate_params({"mode": "netcheck", "quick": True, "dataset": "synthetic",
+                                      "model": "tiny_cnn"})
+
+    def test_netcheck_run_id_va_mo_ta(self):
+        p = protocol.validate_params({"mode": "netcheck"})
+        self.assertEqual(protocol.new_run_id(p, datetime(2026, 11, 18, 9, 0, 0)),
+                         "lab-netcheck-20261118-090000")
+        rows = dict(protocol.describe_params(p))
+        self.assertIn("Kiểm tra mạng", rows["Chế độ"])
+        self.assertNotIn("Model", rows)
+
+    def test_netcheck_experiment_hop_le(self):
+        p = protocol.validate_params({"mode": "netcheck"})
+        d = protocol.build_experiment(p, ["doan-tuan", "trinh-duc"], "lab-netcheck-x")
+        spec = ExperimentSpec(**{**d, "workers": tuple(d["workers"])})
+        spec.validate()
+        self.assertEqual((spec.world_size, spec.master_port, spec.timeout_s), (2, 29500, 300))
+
+
 if __name__ == "__main__":
     unittest.main()
