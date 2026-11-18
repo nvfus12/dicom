@@ -168,7 +168,4 @@ Gửi bảng này (kèm ảnh chụp `nvidia-smi` và kết quả `gpubench chec
 
 ## Hôm thí nghiệm (chủ máy làm)
 
-1. Cắm sạc. Settings → System → Power: Power mode **Best performance**; Screen and sleep khi cắm sạc: **Never**.
-2. Nối Wi-Fi router của LAB. Tắt "Connect automatically" của Wi-Fi trường để máy không tự nhảy mạng.
-3. `ipconfig`: báo người điều phối địa chỉ IPv4 của card Wi-Fi (`doan-tuan` dự kiến `192.168.0.103`, `trinh-duc` dự kiến `192.168.0.102`).
-4. Mở agent như Bước 7 và để cửa sổ mở suốt buổi. Khi hộp thoại xin phép hiện ra, đọc nội dung rồi bấm **Cho phép**.
+Làm theo **[HUONG_DAN_BUOI_CHAY_WORKER.md](HUONG_DAN_BUOI_CHAY_WORKER.md)** trong cùng thư mục: cập nhật code, nguồn, tường lửa, nối Wi-Fi router và báo IP, mở agent, bấm Cho phép, xử lý sự cố, dọn dẹp sau buổi.
