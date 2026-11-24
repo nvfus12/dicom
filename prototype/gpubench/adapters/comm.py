@@ -2,12 +2,39 @@
 from __future__ import annotations
 
 import os
+import socket
 import sys
 from datetime import timedelta
 from typing import Any
 
 import torch
 import torch.distributed as dist
+import torch.distributed.distributed_c10d as c10d
+
+
+def local_ipv4_toward(address: str, port: int) -> str:
+    """The IPv4 address this machine uses to reach `address`, as chosen by the routing table.
+    Connecting a UDP socket sends nothing; it only picks the outgoing interface."""
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        sock.connect((address, port))
+        return sock.getsockname()[0]
+
+
+def _pinned_gloo_class(bind_addr: str):
+    """A ProcessGroupGloo whose device listens on `bind_addr` instead of the address gloo picks
+    from GLOO_SOCKET_IFNAME or the hostname. init_process_group ignores device options for
+    gloo, so this class stands in for ProcessGroupGloo while the default group is built."""
+    original = c10d.ProcessGroupGloo
+
+    class Pinned(original):
+        def __init__(self, store, rank, size, timeout=timedelta(seconds=1800)):
+            options = original._Options()
+            options._devices = [original.create_device(hostname=bind_addr)]
+            options._timeout = timeout
+            options._threads = 2
+            super().__init__(store, rank, size, options)
+
+    return original, Pinned
 
 
 class LocalComm:
@@ -46,14 +73,21 @@ class GlooComm:
     """
 
     def __init__(self, master_addr: str, master_port: int, rank: int, world_size: int,
-                 timeout_s: int):
+                 timeout_s: int, bind_addr: str | None = None):
         if sys.platform == "win32":
             # Windows wheels of PyTorch may lack libuv for TCPStore.
             os.environ.setdefault("USE_LIBUV", "0")
-        dist.init_process_group(backend="gloo",
-                                init_method=f"tcp://{master_addr}:{master_port}",
-                                rank=rank, world_size=world_size,
-                                timeout=timedelta(seconds=timeout_s))
+        original = None
+        if bind_addr:
+            original, c10d.ProcessGroupGloo = _pinned_gloo_class(bind_addr)
+        try:
+            dist.init_process_group(backend="gloo",
+                                    init_method=f"tcp://{master_addr}:{master_port}",
+                                    rank=rank, world_size=world_size,
+                                    timeout=timedelta(seconds=timeout_s))
+        finally:
+            if original is not None:
+                c10d.ProcessGroupGloo = original
         self.rank = rank
         self.world_size = world_size
 

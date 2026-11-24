@@ -12,7 +12,7 @@ from pathlib import Path
 
 import torch
 
-from ..adapters.comm import GlooComm, LocalComm
+from ..adapters.comm import GlooComm, LocalComm, local_ipv4_toward
 from ..adapters.data import build_dataset
 from ..adapters.device import build_device
 from ..adapters.metrics import JsonlSink
@@ -34,6 +34,17 @@ def rendezvous_address(spec: ExperimentSpec, configs_dir: Path,
         raise ConfigError(f"Máy rank 0 '{root.name}' chưa có address trong "
                           f"configs/machines/{root.name}.yaml")
     return root.address
+
+
+def gloo_bind_address(master: str, port: int) -> str | None:
+    """The IPv4 address gloo should listen on: the one this machine uses to reach rank 0.
+
+    Picking gloo's address from the adapter name (GLOO_SOCKET_IFNAME) crashed both lab laptops
+    while connecting; the routing table's choice avoids IPv6 and virtual adapters. Set
+    GPUBENCH_GLOO_DEVICE=interface to go back to the adapter name."""
+    if os.environ.get("GPUBENCH_GLOO_DEVICE", "").lower() == "interface":
+        return None
+    return local_ipv4_toward(master, port)
 
 
 def apply_environment(machine: MachineProfile) -> None:
@@ -60,7 +71,11 @@ def run(machine_name: str, spec: ExperimentSpec, run_id: str | None = None,
         master = rendezvous_address(spec, configs_dir, master_addr)
         print(f"[{machine.name}] rank {rank}/{spec.world_size}, chờ các máy khác tại "
               f"{master}:{spec.master_port} ...", flush=True)
-        comm = GlooComm(master, spec.master_port, rank, spec.world_size, spec.timeout_s)
+        bind = gloo_bind_address(master, spec.master_port)
+        print(f"[{machine.name}] gloo dùng địa chỉ {bind or 'theo tên card ' + str(machine.network_interface)}",
+              flush=True)
+        comm = GlooComm(master, spec.master_port, rank, spec.world_size, spec.timeout_s,
+                        bind_addr=bind)
 
     try:
         # Every worker must run the same experiment.

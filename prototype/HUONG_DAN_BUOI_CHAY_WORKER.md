@@ -127,6 +127,32 @@ cd E:\gpubench
 
 **Cần máy gấp:** bấm **Dừng huấn luyện** trên cửa sổ agent rồi xác nhận. Cả lượt dừng an toàn; người điều phối thấy ngay ai đã dừng.
 
+## 6b. Chẩn đoán kết nối giữa hai máy: glootest (chỉ khi được nhờ)
+
+Thử lần lượt các cách mở kết nối gloo giữa hai máy và in bảng **ĐẠT / LỖI**. Cả hai máy ở **Wi-Fi router**, **đóng cửa sổ agent trước**. Lấy IP của máy `doan-tuan` bằng `ipconfig` (khối `Wi-Fi`); dưới đây gọi là `<IP doan-tuan>`, **giống nhau trên cả hai máy**.
+
+`doan-tuan` (chạy trước):
+
+```bash
+cd E:\gpubench
+```
+
+```bash
+.\.venv\Scripts\python.exe -m gpubench glootest -m doan-tuan --master-addr <IP doan-tuan>
+```
+
+`trinh-duc` (chạy trong vòng 30 giây sau):
+
+```bash
+cd D:\gpubench
+```
+
+```bash
+.\.venv\Scripts\python.exe -m gpubench glootest -m trinh-duc --master-addr <IP doan-tuan>
+```
+
+Mỗi cách chờ máy kia tối đa 90 giây, nên cả lệnh có thể mất tới khoảng 4 phút nếu có cách bị lỗi. Cuối cùng in "=== Kết quả glootest ===" với hai dòng `theo-ten-card` và `theo-ip`. **Chụp màn hình toàn bộ cửa sổ PowerShell của cả hai máy** gửi người điều phối.
+
 ## 7. Khi người điều phối nhờ tắt IPv6 (chỉ khi được yêu cầu)
 
 Dùng khi kết nối giữa hai máy bị lỗi. Chỉ tắt IPv6 trên card Wi-Fi; IPv4 (mạng router, mạng trường) vẫn chạy bình thường. **Terminal (Admin)**:

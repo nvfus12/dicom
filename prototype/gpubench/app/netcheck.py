@@ -20,7 +20,7 @@ import torch
 from ..adapters.comm import GlooComm
 from ..adapters.metrics import JsonlSink
 from ..domain.config import ConfigError, ExperimentSpec
-from .bootstrap import apply_environment, rendezvous_address
+from .bootstrap import apply_environment, gloo_bind_address, rendezvous_address
 from .config_loader import CONFIGS_DIR, RESULTS_DIR, load_machine
 
 MB = 2**20
@@ -119,7 +119,10 @@ def run_netcheck(machine_name: str, spec: ExperimentSpec, master_addr: str | Non
     master = rendezvous_address(spec, configs_dir, master_addr)
     print(f"[{machine.name}] rank {rank}/{spec.world_size}, chờ các máy khác tại "
           f"{master}:{spec.master_port} ...", flush=True)
-    comm = GlooComm(master, spec.master_port, rank, spec.world_size, spec.timeout_s)
+    bind = gloo_bind_address(master, spec.master_port)
+    print(f"[{machine.name}] gloo dùng địa chỉ {bind or 'theo tên card ' + str(machine.network_interface)}",
+          flush=True)
+    comm = GlooComm(master, spec.master_port, rank, spec.world_size, spec.timeout_s, bind_addr=bind)
     sink = None
     try:
         run_id = comm.broadcast_object(run_id or f"netcheck-{time.strftime('%Y%m%d-%H%M%S')}")

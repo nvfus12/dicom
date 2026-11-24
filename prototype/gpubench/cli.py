@@ -146,6 +146,13 @@ def cmd_netcheck(args) -> int:
     return 0
 
 
+def cmd_glootest(args) -> int:
+    from .app.glootest import run_glootest
+
+    spec = load_experiment(args.experiment, parse_overrides(args.set))
+    return run_glootest(args.machine, spec, args.master_addr, args.port_base, args.wait)
+
+
 def cmd_machines(args) -> int:
     for name in list_machines():
         m = load_machine(name)
@@ -226,6 +233,16 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--run-id", default=None, help="mặc định: netcheck-<thời gian> do rank 0 đặt")
     p.add_argument("--results-dir", default=None, help=f"mặc định: {RESULTS_DIR}")
     p.set_defaults(func=cmd_netcheck)
+
+    p = sub.add_parser("glootest", help="thử các cách mở kết nối gloo giữa các máy, in ĐẠT / LỖI")
+    p.add_argument("--machine", "-m", required=True)
+    p.add_argument("--experiment", "-e", default="run2_ddp_x2",
+                   help="lấy danh sách máy (thứ tự rank) từ thí nghiệm này")
+    p.add_argument("--set", action="append", default=[], metavar="KEY=VALUE")
+    p.add_argument("--master-addr", required=True, help="IPv4 của máy rank 0 (giống nhau trên mọi máy)")
+    p.add_argument("--port-base", type=int, default=29600, help="mỗi cách dùng một cổng: port-base, +1, ...")
+    p.add_argument("--wait", type=int, default=90, help="giây chờ máy kia ở mỗi cách")
+    p.set_defaults(func=cmd_glootest)
 
     p = sub.add_parser("agent", help="chạy agent LAB trên worker (cửa sổ xin phép, nhận lượt chạy)")
     p.add_argument("--machine", "-m", required=True, help="tên file máy của chính máy này")

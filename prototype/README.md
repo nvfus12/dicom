@@ -72,6 +72,8 @@ Runs a whole training run from one window on the coordinator, without typing com
 
 When a run fails, every agent's full process log is collected into the run folder (`agent-<machine>.log`), even if training never started, and the controller log shows its meaningful lines: on Windows a crash inside PyTorch prints hundreds of native stack frames and no message.
 
+gloo address: gloo now listens on the IPv4 address each machine uses to reach rank 0 (chosen by the routing table), instead of the address it picks from the adapter name (`GLOO_SOCKET_IFNAME`). On the two lab laptops, both machines crashed inside `ProcessGroupGloo` with the adapter-name method, while the rendezvous itself succeeded; the cause is not confirmed yet (a suspected IPv6 address). Set `GPUBENCH_GLOO_DEVICE=interface` to use the adapter name again. `python -m gpubench glootest -m <machine> --master-addr <rank 0 IPv4>`, run on every worker, tries both methods in separate processes and prints which one connects.
+
 How it behaves when things go wrong:
 - The agent never runs commands it receives; it only accepts named parameters from an allow-list and runs `gpubench run` with them.
 - An owner can stop training at any time from the agent window; the controller then stops every other worker and records who stopped the run.
