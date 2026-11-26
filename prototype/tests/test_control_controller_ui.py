@@ -45,8 +45,10 @@ class FakeSession:
     approve = True
     resume_with: "FakeSession | None" = None
 
-    def __init__(self, agents, params, results_root, quick_root, prototype_dir, on_event=None):
+    def __init__(self, agents, params, results_root, quick_root, prototype_dir, on_event=None,
+                 rank0=None):
         self.agents, self.params, self.results_root = agents, params, results_root
+        self.rank0 = rank0
         self.on_event = on_event or (lambda kind, data: None)
         self.run_id = "lab-localsgd-resnet20-20261116-100000"
         self.workers = ["doan-tuan", "trinh-duc"]
@@ -180,6 +182,49 @@ class ControllerWindowTest(unittest.TestCase):
 
     def log_text(self):
         return self.win.log.get("1.0", "end")
+
+    def test_cac_nut_chan_doan_tu_start(self):
+        for button, mode in ((self.win.selftest_button, "selftest"), (self.win.porttest_button, "porttest"),
+                             (self.win.glootest_button, "glootest"), (self.win.profile_button, "profile")):
+            with self.subTest(mode=mode):
+                FakeSession.instances.clear()
+                button.invoke()
+                s = self.session()
+                self.assertEqual(s.params.mode, mode)
+                self.assertTrue(pump_until(self.win.root, lambda: "collect" in s.calls, timeout=15))
+                self.assertEqual(s.calls[:3], ["check", "request_all", "start"])
+                self.assertTrue(pump_until(self.win.root,
+                                           lambda: str(self.win.send_button["state"]) == "normal"))
+
+    def test_do_gpu_dung_model_tren_form(self):
+        self.win.model_var.set("ResNet-18")
+        self.win.profile_button.invoke()
+        self.assertEqual(self.session().params.model, "resnet18")
+
+    def test_diem_gap_va_cach_ket_noi_gloo(self):
+        self.win.rank0_var.set("trinh-duc")
+        self.win.gloo_var.set("theo tên card")
+        self.win.send_button.invoke()
+        s = self.session()
+        self.assertEqual((s.rank0, s.params.gloo_device), ("trinh-duc", "interface"))
+        self.win.rank0_var.set("Tự động")
+        self.win.gloo_var.set("theo IP")
+        FakeSession.instances.clear()
+        self.assertTrue(pump_until(self.win.root, lambda: str(self.win.send_button["state"]) == "normal"))
+        self.win.glootest_button.invoke()
+        s = self.session()
+        self.assertEqual((s.rank0, s.params.gloo_device), (None, "ipv4"))
+
+    def test_che_do_single_gpu(self):
+        self.win.mode_var.set("single")
+        self.assertEqual(self.win.collect_params().mode, "single")
+
+    def test_ket_luan_hien_trong_nhat_ky(self):
+        self.win._on_event("verdict", {"status": "LỖI", "lines": ["theo-ten-card: LỖI", "theo-ip: ĐẠT"],
+                                       "hint": "Bước tiếp: chạy thử."})
+        self.assertTrue(pump_until(self.win.root, lambda: "KẾT LUẬN: LỖI" in self.log_text()))
+        self.assertIn("theo-ip: ĐẠT", self.log_text())
+        self.assertIn("→ Bước tiếp: chạy thử.", self.log_text())
 
     def test_kiem_tra_mang_tu_start_sau_khi_dong_y(self):
         self.win.netcheck_button.invoke()

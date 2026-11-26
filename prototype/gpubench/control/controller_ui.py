@@ -21,7 +21,8 @@ from ..app.config_loader import PROJECT_DIR
 import yaml
 
 from .controller_core import AgentClient, AgentRef, RunSession, load_lab, netcheck_summary
-from .protocol import DEFAULT_PORT, MODE_LABELS, POLL_INTERVAL_S, ProtocolError, RunParams, rank_order, validate_params
+from .protocol import (DEFAULT_PORT, MODE_LABELS, POLL_INTERVAL_S, ProtocolError, RunParams, job_kind,
+                       rank_order, validate_params)
 
 DATASETS = {"CIFAR-10": "cifar10"}
 MODELS = {"ResNet-20": "resnet20", "ResNet-18": "resnet18"}
@@ -30,6 +31,8 @@ STATE_LABELS = {"RUNNING": "đang chạy", "FINISHED": "xong", "FAILED": "lỗi"
                 "UNREACHABLE": "mất liên lạc", "LOST": "mất lượt chạy", "IDLE": "rảnh",
                 "ASKING": "đang hỏi chủ máy", "APPROVED": "đã cho phép"}
 DRAIN_MS = 100
+GLOO_CHOICES = {"theo IP": "ipv4", "theo tên card": "interface"}
+AUTO_RANK0 = "Tự động"
 
 
 class ControllerWindow:
@@ -101,6 +104,8 @@ class ControllerWindow:
         self.lr_var = tk.StringVar(value="0.1")
         self.comm_var = tk.StringVar(value="fp32")
         self.quick_var = tk.BooleanVar(value=False)
+        self.gloo_var = tk.StringVar(value="theo IP")
+        self.rank0_var = tk.StringVar(value=AUTO_RANK0)
 
         ttk.Label(form, text="Dataset").grid(row=0, column=0, sticky="w")
         self.dataset_box = ttk.Combobox(form, textvariable=self.dataset_var, values=list(DATASETS),
@@ -120,6 +125,8 @@ class ControllerWindow:
         ttk.Label(modes, text="   H (bước)").pack(side="left")
         self.h_entry = ttk.Entry(modes, textvariable=self.h_var, width=7)
         self.h_entry.pack(side="left", padx=(4, 0))
+        ttk.Radiobutton(modes, text="Single GPU (chọn 1 máy)", value="single",
+                        variable=self.mode_var).pack(side="left", padx=(16, 0))
 
         ttk.Label(form, text="Thời gian tối đa (phút)").grid(row=2, column=0, sticky="w", pady=(6, 0))
         ttk.Entry(form, textvariable=self.minutes_var, width=8).grid(row=2, column=1, sticky="w",
@@ -155,6 +162,30 @@ class ControllerWindow:
         self.stop_button.pack(side="left")
         self.netcheck_button = ttk.Button(actions, text="Kiểm tra mạng", command=self.run_netcheck)
         self.netcheck_button.pack(side="left", padx=(24, 0))
+
+        connection = ttk.Frame(form)
+        connection.grid(row=7, column=0, columnspan=4, sticky="w", pady=(10, 0))
+        ttk.Label(connection, text="Cách kết nối gloo").pack(side="left")
+        ttk.Combobox(connection, textvariable=self.gloo_var, values=list(GLOO_CHOICES), width=14,
+                     state="readonly").pack(side="left", padx=(4, 16))
+        ttk.Label(connection, text="Máy làm điểm gặp (rank 0)").pack(side="left")
+        ttk.Combobox(connection, textvariable=self.rank0_var, width=14, state="readonly",
+                     values=[AUTO_RANK0] + [c.name for c in self.clients]).pack(side="left", padx=(4, 0))
+
+        checks = ttk.LabelFrame(form, text="Chẩn đoán và đo (tự chạy khi mọi máy đồng ý; kết quả và "
+                                           "gợi ý bước tiếp hiện trong Nhật ký)", padding=4)
+        checks.grid(row=8, column=0, columnspan=4, sticky="we", pady=(10, 0))
+        self.selftest_button = ttk.Button(checks, text="1. Tự thử từng máy",
+                                          command=lambda: self.run_check("selftest"))
+        self.porttest_button = ttk.Button(checks, text="2. Thông đường TCP",
+                                          command=lambda: self.run_check("porttest"))
+        self.glootest_button = ttk.Button(checks, text="3. glootest",
+                                          command=lambda: self.run_check("glootest"))
+        self.profile_button = ttk.Button(checks, text="Đo GPU (model trên form)",
+                                         command=lambda: self.run_check("profile"))
+        for button in (self.selftest_button, self.porttest_button, self.glootest_button,
+                       self.profile_button):
+            button.pack(side="left", padx=(0, 6))
 
         self.mode_var.trace_add("write", lambda *_: self._sync_form())
         self.quick_var.trace_add("write", lambda *_: self._sync_form())
@@ -237,6 +268,10 @@ class ControllerWindow:
             word = "ĐỒNG Ý" if data["decision"] == "allow" else "TỪ CHỐI"
             text = f"{data['machine']}: {word}" + (f" ({data['reason']})" if data.get("reason") else "")
             self._post(lambda: self.write_log(text))
+        elif kind == "verdict":
+            lines = [f"KẾT LUẬN: {data['status']}"] + [f"    {line}" for line in data["lines"]] + [
+                f"→ {data['hint']}"]
+            self._post(lambda: [self.write_log(line) for line in lines])
         elif kind == "failure_detail":
             lines = [f"Log lỗi của {data['machine']}:"] + [
                 f"    {line}" for line in (data.get("excerpt") or "(trống)").splitlines()]
@@ -359,14 +394,21 @@ class ControllerWindow:
                 "max_epochs": number(self.epochs_var, "Epoch tối đa"),
                 "batch_size": number(self.batch_var, "Batch mỗi máy"),
                 "lr": number(self.lr_var, "LR", float),
-                "comm_dtype": self.comm_var.get()}
+                "comm_dtype": self.comm_var.get(),
+                "gloo_device": GLOO_CHOICES.get(self.gloo_var.get(), "ipv4")}
         if data["mode"] == "localsgd":
             data["local_steps"] = number(self.h_var, "H")
         return validate_params(data)
 
+    def _rank0(self) -> str | None:
+        choice = self.rank0_var.get()
+        return None if choice == AUTO_RANK0 else choice
+
     def _set_buttons(self, send: bool, start: bool, stop: bool) -> None:
         self.send_button.configure(state="normal" if send else "disabled")
-        self.netcheck_button.configure(state="normal" if send else "disabled")
+        for button in (self.netcheck_button, self.selftest_button, self.porttest_button,
+                       self.glootest_button, self.profile_button):
+            button.configure(state="normal" if send else "disabled")
         self.start_button.configure(state="normal" if start else "disabled")
         self.stop_button.configure(state="normal" if stop else "disabled")
 
@@ -383,21 +425,42 @@ class ControllerWindow:
     def run_netcheck(self) -> None:
         """Measures the network between the selected workers. Owners still approve it; it starts
         by itself once everyone has, since there is nothing to configure."""
-        self._send(validate_params({"mode": "netcheck"}), auto_start=True)
+        self._send(validate_params({"mode": "netcheck",
+                                    "gloo_device": GLOO_CHOICES.get(self.gloo_var.get(), "ipv4")}),
+                   auto_start=True)
+
+    def run_check(self, mode: str) -> None:
+        """A step of the diagnosis ladder (or a GPU measurement) on the selected machines."""
+        data = {"mode": mode, "gloo_device": GLOO_CHOICES.get(self.gloo_var.get(), "ipv4")}
+        if mode == "profile":
+            quick = self.quick_var.get()
+            data.update(quick=quick, dataset="synthetic" if quick else "cifar10",
+                        model="tiny_cnn" if quick else MODELS.get(self.model_var.get(), "resnet20"))
+        try:
+            params = validate_params(data)
+        except ProtocolError as e:
+            messagebox.showerror("Tham số không hợp lệ", str(e), parent=self.root)
+            return
+        self._send(params, auto_start=True)
 
     def _send(self, params: RunParams, auto_start: bool = False) -> None:
         clients = [c for c in self.clients if c.name in self.selected]
-        if len(clients) < 2:
-            messagebox.showerror("Chưa đủ máy", "Cần chọn ít nhất 2 máy.", parent=self.root)
+        kind = job_kind(params.mode)
+        if len(clients) < kind.min_machines or (kind.max_machines and len(clients) > kind.max_machines):
+            need = (f"đúng {kind.min_machines} máy" if kind.min_machines == kind.max_machines
+                    else f"ít nhất {kind.min_machines} máy")
+            messagebox.showerror("Số máy chưa đúng", f"{MODE_LABELS[params.mode]} cần {need}.",
+                                 parent=self.root)
             return
         self._release_unstarted()
         session = self.session_factory(clients, params, self.results_root, self.quick_root,
-                                       self.prototype_dir, on_event=self._on_event)
+                                       self.prototype_dir, on_event=self._on_event,
+                                       rank0=self._rank0())
         self.session = session
         self._busy = True
         self._set_buttons(False, False, False)
         mode = MODE_LABELS[params.mode] + (f", H={params.local_steps}" if params.mode == "localsgd" else "")
-        if params.mode == "netcheck":
+        if params.mode == "netcheck" or (kind.diagnostic and params.mode != "profile"):
             self.write_log(f"Gửi yêu cầu: {mode}")
         else:
             self.write_log(f"Gửi yêu cầu: {mode}, {params.model}" + (" (chạy thử)" if params.quick else ""))

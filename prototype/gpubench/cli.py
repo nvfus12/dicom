@@ -97,7 +97,9 @@ def cmd_profile(args) -> int:
     device = build_device(m, args.amp)
     print(f"Máy {m.name}: {device.describe()}")
     suggestion = {}
+    rows: dict[str, list] = {}
     for model_name in args.models:
+        rows[model_name] = []
         print(f"== {model_name} (amp={device.amp})")
         model = build_model(model_name, 10).to(device.torch_device)
         opt = torch.optim.SGD(model.parameters(), lr=0.01, momentum=0.9)
@@ -123,9 +125,12 @@ def cmd_profile(args) -> int:
                 peak = device.peak_memory_bytes()
                 peak_txt = f"{peak / 2**20:.0f} MB" if peak is not None else "n/a"
                 print(f"  batch {bs:>4}: {rate:8.0f} mẫu/s, VRAM peak {peak_txt}")
+                rows[model_name].append({"batch": bs, "samples_per_s": round(rate, 1),
+                                         "vram_peak_mb": round(peak / 2**20) if peak is not None else None})
                 best = bs
             except torch.OutOfMemoryError:
                 print(f"  batch {bs:>4}: hết VRAM")
+                rows[model_name].append({"batch": bs, "out_of_memory": True})
                 break
             finally:
                 if device.torch_device.type == "cuda":
@@ -134,6 +139,12 @@ def cmd_profile(args) -> int:
             suggestion[model_name] = best
     print("Gợi ý cho file máy (nên chừa dư VRAM cho chủ máy, chọn nhỏ hơn 1 bậc nếu cần):")
     print(f"  max_batch: {suggestion}")
+    if args.json_out:
+        import json
+        Path(args.json_out).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.json_out).write_text(json.dumps(
+            {"machine": m.name, "device": device.describe(), "models": rows, "suggestion": suggestion},
+            ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     return 0
 
 
@@ -151,12 +162,16 @@ def cmd_glootest(args) -> int:
 
     spec = load_experiment(args.experiment, parse_overrides(args.set))
     return run_glootest(args.machine, spec, args.master_addr, args.port_base, args.wait,
-                        self_test=args.self_test, toward=args.toward)
+                        self_test=args.self_test, toward=args.toward,
+                        json_out=Path(args.json_out) if args.json_out else None)
 
 
 def cmd_porttest(args) -> int:
     from .app import porttest
 
+    if args.porttest_action == "pair":
+        return porttest.pair(args.machine, args.rank, args.peer, args.port, args.window,
+                             Path(args.json_out) if args.json_out else None)
     if args.porttest_action == "listen":
         return porttest.listen(args.port, args.seconds)
     return porttest.probe(args.host, args.port, args.timeout)
@@ -233,6 +248,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--batches", nargs="+", type=int, default=[64, 128, 256, 512, 1024])
     p.add_argument("--steps", type=int, default=10)
     p.add_argument("--amp", action="store_true", help="đo với mixed precision")
+    p.add_argument("--json-out", default=None, help="ghi kết quả ra file JSON (dùng bởi agent)")
     p.set_defaults(func=cmd_profile)
 
     p = sub.add_parser("netcheck", help="đo độ trễ và thông lượng giữa các máy của một thí nghiệm")
@@ -256,6 +272,7 @@ def main(argv: list[str] | None = None) -> int:
                    help="tự thử trên một máy: hai tiến trình nói chuyện qua IPv4 thật của máy này")
     p.add_argument("--toward", default="192.168.0.1",
                    help="với --self: lấy IPv4 của card dùng để đi tới địa chỉ này (mặc định router LAB)")
+    p.add_argument("--json-out", default=None, help="ghi kết quả ra file JSON (dùng bởi agent)")
     p.set_defaults(func=cmd_glootest)
 
     p = sub.add_parser("porttest", help="thử máy kia có mở được kết nối TCP tới Python trên máy này")
@@ -267,6 +284,13 @@ def main(argv: list[str] | None = None) -> int:
     q.add_argument("host", help="IPv4 của máy đang chạy listen")
     q.add_argument("--port", type=int, default=45000)
     q.add_argument("--timeout", type=float, default=5)
+    q = porttest_sub.add_parser("pair", help="thử cả hai chiều cùng lúc (dùng bởi agent)")
+    q.add_argument("--machine", "-m", required=True)
+    q.add_argument("--rank", type=int, choices=[0, 1], required=True)
+    q.add_argument("--peer", required=True, help="IPv4 của máy kia")
+    q.add_argument("--port", type=int, default=45000, help="rank 0 nghe ở cổng này, rank 1 ở cổng +1")
+    q.add_argument("--window", type=float, default=45)
+    q.add_argument("--json-out", default=None)
     p.set_defaults(func=cmd_porttest)
 
     p = sub.add_parser("agent", help="chạy agent LAB trên worker (cửa sổ xin phép, nhận lượt chạy)")

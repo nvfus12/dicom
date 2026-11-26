@@ -74,8 +74,19 @@ When a run fails, every agent's full process log is collected into the run folde
 
 gloo address: gloo now listens on the IPv4 address each machine uses to reach rank 0 (chosen by the routing table), instead of the address it picks from the adapter name (`GLOO_SOCKET_IFNAME`). On the two lab laptops, both machines crashed inside `ProcessGroupGloo` with the adapter-name method, while the rendezvous itself succeeded; the cause is not confirmed yet (a suspected IPv6 address). Set `GPUBENCH_GLOO_DEVICE=interface` to use the adapter name again. `python -m gpubench glootest -m <machine> --master-addr <rank 0 IPv4>`, run on every worker, tries both methods in separate processes and prints which one connects; `--self` runs both ranks on one machine over its own Wi-Fi address, to tell a problem inside one machine from a network one. `python -m gpubench porttest listen` / `porttest probe <IPv4>` checks that the other machine can open a TCP connection to this machine's Python (firewall rules that block the .venv Python show up here). PyTorch's detailed distributed logging is switched on in every glootest attempt.
 
+The same checks run from the controller ("Chẩn đoán và đo"), one approval per check, with no commands typed on the workers:
+
+| Button | What the agents run | Verdict in the controller log |
+|---|---|---|
+| 1. Tự thử từng máy | `glootest --self` on each machine | which machine cannot open gloo to itself |
+| 2. Thông đường TCP | `porttest pair` on both machines at once: each listens and calls the other | which direction is blocked, and by whose firewall |
+| 3. glootest | `glootest` against rank 0, both methods | which method connects, and the next step |
+| Đo GPU | `profile` with the model on the form | samples/s at batch 128, peak VRAM, largest batch that fits |
+
+"Cách kết nối gloo" (by IP, or by adapter name) applies to every run, diagnostic or training. "Máy làm điểm gặp" overrides which machine is rank 0 (by default the one with the most VRAM). "Single GPU" trains on one selected machine. Every run, diagnostics included, leaves a folder in `results/` (or `results-thu/` for quick runs) with `controller.json` (parameters, verdict, and each machine's Python, driver, power and firewall state), the agents' logs and the diagnostics' `diag-<machine>.json`, plus one row in `results/INDEX.csv`.
+
 How it behaves when things go wrong:
-- The agent never runs commands it receives; it only accepts named parameters from an allow-list and runs `gpubench run` with them.
+- The agent never runs commands it receives; it only accepts named parameters from an allow-list and runs `gpubench run`, `netcheck`, `glootest`, `porttest` or `profile` with them.
 - An owner can stop training at any time from the agent window; the controller then stops every other worker and records who stopped the run.
 - A worker that stops answering does not stop the run by itself (a busy 2.4 GHz Wi-Fi can drop polls); a worker whose training dies makes gloo fail on the others.
 - If the controller is closed during a run, training continues; reopening the controller picks the run up again and collects its results.

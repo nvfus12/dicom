@@ -27,7 +27,7 @@ class ValidateParamsTest(unittest.TestCase):
         self.assertIn("command", str(caught.exception))
 
     def test_gioi_han(self):
-        for bad in ({"mode": "single"}, {}, {"mode": "ddp", "max_train_minutes": 0},
+        for bad in ({"mode": "khong-co"}, {},{"mode": "ddp", "max_train_minutes": 0},
                     {"mode": "ddp", "max_train_minutes": 241}, {"mode": "localsgd", "local_steps": 5000},
                     {"mode": "localsgd", "local_steps": 0}, {"mode": "ddp", "max_epochs": 301},
                     {"mode": "ddp", "batch_size": 8}, {"mode": "ddp", "lr": 2},
@@ -173,6 +173,70 @@ class NetcheckParamsTest(unittest.TestCase):
         spec = ExperimentSpec(**{**d, "workers": tuple(d["workers"])})
         spec.validate()
         self.assertEqual((spec.world_size, spec.master_port, spec.timeout_s), (2, 29500, 300))
+
+
+class JobKindsTest(unittest.TestCase):
+    NOW = datetime(2026, 11, 27, 9, 15, 0)
+
+    def test_moi_loai_luot_hop_le(self):
+        for mode in ("selftest", "glootest", "porttest", "profile", "single"):
+            p = protocol.validate_params({"mode": mode})
+            self.assertEqual((p.mode, p.gloo_device), (mode, "ipv4"))
+
+    def test_cach_ket_noi_gloo(self):
+        self.assertEqual(protocol.validate_params({"mode": "ddp", "gloo_device": "interface"}).gloo_device,
+                         "interface")
+        with self.assertRaises(protocol.ProtocolError):
+            protocol.validate_params({"mode": "ddp", "gloo_device": "wifi"})
+
+    def test_chan_doan_khong_co_chay_thu(self):
+        for mode in ("selftest", "glootest", "porttest"):
+            with self.subTest(mode=mode), self.assertRaises(protocol.ProtocolError):
+                protocol.validate_params({"mode": mode, **QUICK})
+
+    def test_so_may_va_gpu_theo_loai(self):
+        k = protocol.job_kind
+        self.assertEqual((k("selftest").min_machines, k("selftest").max_machines), (1, None))
+        self.assertEqual((k("porttest").min_machines, k("porttest").max_machines), (2, 2))
+        self.assertEqual((k("single").min_machines, k("single").max_machines), (1, 1))
+        self.assertEqual(k("ddp").min_machines, 2)
+        self.assertTrue(k("profile").needs_cuda and k("single").needs_cuda and k("ddp").needs_cuda)
+        self.assertFalse(k("glootest").needs_cuda or k("porttest").needs_cuda or k("netcheck").needs_cuda)
+        self.assertTrue(k("glootest").diagnostic and not k("ddp").diagnostic)
+        self.assertTrue(k("ddp").analyse and k("single").analyse and k("netcheck").analyse)
+        self.assertFalse(k("glootest").analyse or k("profile").analyse)
+
+    def test_ten_thu_muc_theo_loai(self):
+        rid = protocol.new_run_id
+        p = protocol.validate_params
+        self.assertEqual(rid(p({"mode": "selftest"}), self.NOW, ["doan-tuan", "trinh-duc"]),
+                         "lab-selftest-20261127-091500")
+        self.assertEqual(rid(p({"mode": "glootest"}), self.NOW, ["trinh-duc", "doan-tuan"]),
+                         "lab-glootest-trinh-duc-doan-tuan-20261127-091500")
+        self.assertEqual(rid(p({"mode": "porttest"}), self.NOW, ["doan-tuan", "trinh-duc"]),
+                         "lab-porttest-doan-tuan-trinh-duc-20261127-091500")
+        self.assertEqual(rid(p({"mode": "profile"}), self.NOW, ["doan-tuan"]),
+                         "lab-profile-resnet20-20261127-091500")
+        self.assertEqual(rid(p({"mode": "single"}), self.NOW, ["trinh-duc"]),
+                         "lab-single-resnet20-trinh-duc-20261127-091500")
+        self.assertEqual(rid(p({"mode": "ddp"}), self.NOW, ["a", "b"]), "lab-ddp-resnet20-20261127-091500")
+        self.assertEqual(rid(p({"mode": "single", **QUICK}), self.NOW, ["sim-0"]),
+                         "thu-single-tiny_cnn-sim-0-20261127-091500")
+
+    def test_experiment_single_va_glootest(self):
+        d = protocol.build_experiment(protocol.validate_params({"mode": "single"}), ["trinh-duc"], "x")
+        spec = ExperimentSpec(**{**d, "workers": tuple(d["workers"])})
+        spec.validate()
+        self.assertEqual((spec.mode, spec.lr_scaling), ("single", "none"))
+        d = protocol.build_experiment(protocol.validate_params({"mode": "glootest"}), ["a", "b"], "y")
+        ExperimentSpec(**{**d, "workers": tuple(d["workers"])}).validate()
+
+    def test_mo_ta_hop_thoai(self):
+        rows = dict(protocol.describe_params(protocol.validate_params({"mode": "porttest"})))
+        self.assertIn("TCP", rows["Chế độ"])
+        rows = dict(protocol.describe_params(protocol.validate_params({"mode": "ddp",
+                                                                       "gloo_device": "interface"})))
+        self.assertEqual(rows["Cách kết nối gloo"], "theo tên card")
 
 
 if __name__ == "__main__":

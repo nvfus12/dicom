@@ -62,7 +62,7 @@ class PortTest(unittest.TestCase):
     def test_nghe_het_gio_khong_ai_goi(self):
         code, out = captured(porttest.listen, free_port(), seconds=1, host="127.0.0.1")
         self.assertEqual(code, 1)
-        self.assertIn("Không nhận được kết nối nào", out)
+        self.assertIn("không nhận được kết nối nào", out)
 
 
 if __name__ == "__main__":

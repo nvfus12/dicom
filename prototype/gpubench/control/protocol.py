@@ -18,9 +18,43 @@ APPROVAL_VALID_S = 600              # an approval covers one run_id for this lon
 POLL_INTERVAL_S = 3
 AGENT_VERSION = "1.0"
 
-MODES = ("ddp", "localsgd", "sync", "netcheck")
+MODES = ("ddp", "localsgd", "sync", "netcheck", "selftest", "glootest", "porttest", "profile", "single")
 MODE_LABELS = {"ddp": "DDP", "localsgd": "Local SGD", "sync": "Sync (all-reduce thủ công)",
-               "netcheck": "Kiểm tra mạng (khoảng 1–2 phút, không dùng GPU)"}
+               "netcheck": "Kiểm tra mạng (khoảng 1–2 phút, không dùng GPU)",
+               "selftest": "Tự thử gloo trên máy này (khoảng 1 phút, không dùng GPU)",
+               "glootest": "Chẩn đoán kết nối gloo giữa các máy (tối đa 4 phút, không dùng GPU)",
+               "porttest": "Thử thông đường TCP hai chiều giữa hai máy (khoảng 1 phút, không dùng GPU)",
+               "profile": "Đo tốc độ GPU (khoảng 3 phút)",
+               "single": "Single GPU (huấn luyện trên một máy)"}
+GLOO_DEVICES = ("ipv4", "interface")
+GLOO_DEVICE_LABELS = {"ipv4": "theo IP", "interface": "theo tên card"}
+
+
+@dataclass(frozen=True)
+class JobKind:
+    min_machines: int
+    max_machines: int | None
+    needs_cuda: bool        # unless it is a quick run
+    diagnostic: bool        # writes a verdict file instead of a training log
+    analyse: bool           # goes into results/report-lab
+
+
+JOB_KINDS = {
+    "ddp": JobKind(2, None, True, False, True),
+    "localsgd": JobKind(2, None, True, False, True),
+    "sync": JobKind(2, None, True, False, True),
+    "single": JobKind(1, 1, True, False, True),
+    "netcheck": JobKind(2, None, False, False, True),
+    "selftest": JobKind(1, None, False, True, False),
+    "glootest": JobKind(2, None, False, True, False),
+    "porttest": JobKind(2, 2, False, True, False),
+    "profile": JobKind(1, None, True, True, False),
+}
+NO_QUICK = ("netcheck", "selftest", "glootest", "porttest")
+
+
+def job_kind(mode: str) -> JobKind:
+    return JOB_KINDS[mode]
 REAL_DATASETS = ("cifar10",)
 REAL_MODELS = ("resnet20", "resnet18")
 QUICK_DATASETS = ("synthetic",)
@@ -45,6 +79,7 @@ class RunParams:
     lr: float = 0.1
     comm_dtype: str = "fp32"
     quick: bool = False
+    gloo_device: str = "ipv4"       # ipv4: the address that reaches rank 0; interface: by adapter name
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -83,8 +118,8 @@ def validate_params(data: Any) -> RunParams:
     quick = merged["quick"]
     if not isinstance(quick, bool):
         raise ProtocolError(f"'quick' phải là true/false, nhận {quick!r}")
-    if merged["mode"] == "netcheck" and quick:
-        raise ProtocolError("Kiểm tra mạng không có chế độ chạy thử")
+    if merged["mode"] in NO_QUICK and quick:
+        raise ProtocolError(f"{MODE_LABELS.get(merged['mode'], merged['mode'])}: không có chế độ chạy thử")
     return RunParams(
         mode=_choice(merged, "mode", MODES),
         dataset=_choice(merged, "dataset", QUICK_DATASETS if quick else REAL_DATASETS),
@@ -96,22 +131,28 @@ def validate_params(data: Any) -> RunParams:
         lr=_number(merged, "lr", float, 0.001, 1),
         comm_dtype=_choice(merged, "comm_dtype", COMM_DTYPES),
         quick=quick,
+        gloo_device=_choice(merged, "gloo_device", GLOO_DEVICES),
     )
 
 
 def build_experiment(params: RunParams, workers: list[str], run_id: str) -> dict[str, Any]:
     """The experiment mapping every agent writes to disk; identical input gives identical output."""
     local = params.mode == "localsgd"
+    if params.mode == "single":
+        mode = "single"
+    elif params.mode in JOB_KINDS and JOB_KINDS[params.mode].diagnostic or params.mode == "netcheck":
+        mode = "sync"   # checks only need a valid distributed experiment: workers, port, timeout
+    else:
+        mode = params.mode
     data: dict[str, Any] = {
         "name": run_id,
-        # netcheck only needs a valid distributed experiment for its workers, port and timeout
-        "mode": "sync" if params.mode == "netcheck" else params.mode,
+        "mode": mode,
         "workers": list(workers),
         "model": params.model,
         "dataset": params.dataset,
         "batch_size": params.batch_size,
         "lr": params.lr,
-        "lr_scaling": "none" if local else "linear",
+        "lr_scaling": "none" if local or mode == "single" else "linear",
         "warmup_epochs": 1 if local else 2,
         "max_epochs": params.max_epochs,
         "max_train_minutes": params.max_train_minutes,
@@ -139,11 +180,20 @@ def valid_run_id(value: Any) -> bool:
     return isinstance(value, str) and bool(_RUN_ID.fullmatch(value)) and ".." not in value
 
 
-def new_run_id(params: RunParams, now: datetime) -> str:
-    if params.mode == "netcheck":
-        return f"lab-netcheck-{now:%Y%m%d-%H%M%S}"
+def new_run_id(params: RunParams, now: datetime, workers: list[str] = ()) -> str:
+    """Folder name of a run: kind first, then what it ran on, then when.
+    `workers` are in rank order (rank 0 first)."""
+    stamp = f"{now:%Y%m%d-%H%M%S}"
     prefix = "thu" if params.quick else "lab"
-    return f"{prefix}-{params.mode}-{params.model}-{now:%Y%m%d-%H%M%S}"
+    if params.mode in ("netcheck", "selftest"):
+        return f"lab-{params.mode}-{stamp}"
+    if params.mode in ("glootest", "porttest"):
+        return f"lab-{params.mode}-{'-'.join(workers)}-{stamp}"
+    if params.mode == "profile":
+        return f"{prefix}-profile-{params.model}-{stamp}"
+    if params.mode == "single":
+        return f"{prefix}-single-{params.model}-{workers[0]}-{stamp}"
+    return f"{prefix}-{params.mode}-{params.model}-{stamp}"
 
 
 def rank_order(infos: list[dict]) -> list[str]:
@@ -156,8 +206,13 @@ def rank_order(infos: list[dict]) -> list[str]:
 
 def describe_params(params: RunParams) -> list[tuple[str, str]]:
     """Label/value rows for the owner's dialog."""
-    if params.mode == "netcheck":
-        return [("Chế độ", MODE_LABELS["netcheck"])]
+    gloo = ("Cách kết nối gloo", GLOO_DEVICE_LABELS[params.gloo_device])
+    if params.mode in ("netcheck", "selftest", "glootest", "porttest"):
+        rows = [("Chế độ", MODE_LABELS[params.mode])]
+        return rows + [gloo] if params.mode != "porttest" else rows
+    if params.mode == "profile":
+        return [("Chế độ", MODE_LABELS["profile"]),
+                ("Model", "Tiny CNN (chạy thử)" if params.quick else params.model)]
     rows = [("Chế độ", MODE_LABELS[params.mode]),
             ("Model", "Tiny CNN (chạy thử)" if params.quick else params.model),
             ("Dataset", "Dữ liệu tổng hợp (chạy thử)" if params.quick else "CIFAR-10")]
@@ -165,6 +220,8 @@ def describe_params(params: RunParams) -> list[tuple[str, str]]:
         rows.append(("Đồng bộ mỗi (H)", f"{params.local_steps} bước"))
     rows.append(("Thời gian tối đa", f"{params.max_train_minutes:g} phút"))
     rows.append(("Epoch tối đa", str(params.max_epochs)))
+    if params.mode != "single":
+        rows.append(gloo)
     return rows
 
 

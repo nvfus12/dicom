@@ -7,8 +7,10 @@ the agents keep training, and controller.json in the run folder remembers the ru
 """
 from __future__ import annotations
 
+import csv
 import io
 import json
+import os
 import re
 import socket
 import subprocess
@@ -25,8 +27,10 @@ from typing import Callable
 
 import yaml
 
-from .protocol import (APPROVAL_TIMEOUT_S, DEFAULT_PORT, TOKEN_HEADER, ProtocolError, RunParams,
-                       log_excerpt, new_run_id, rank_order, valid_run_id, validate_params)
+from .protocol import (APPROVAL_TIMEOUT_S, DEFAULT_PORT, MODE_LABELS, TOKEN_HEADER, ProtocolError,
+                       RunParams, job_kind, log_excerpt, new_run_id, rank_order, valid_run_id,
+                       validate_params)
+from .verdicts import summarize
 
 FREE_STATES = ("IDLE", "FINISHED", "FAILED", "STOPPED")
 DONE_STATES = ("FINISHED", "FAILED", "STOPPED", "LOST")
@@ -180,9 +184,10 @@ class RunSession:
     def __init__(self, agents: list[AgentClient], params: RunParams, results_root: Path,
                  quick_root: Path, prototype_dir: Path,
                  on_event: Callable[[str, dict], None] = lambda kind, data: None,
-                 clock: Callable[[], float] = time.time):
+                 clock: Callable[[], float] = time.time, rank0: str | None = None):
         self.agents = list(agents)
         self.params = params
+        self.rank0 = rank0          # None: the machine with the most VRAM
         self.results_root = results_root
         self.quick_root = quick_root
         self.prototype_dir = prototype_dir
@@ -213,8 +218,12 @@ class RunSession:
     # ---------------------------------------------------------------- before training
 
     def check(self) -> list[dict]:
-        if len(self.agents) < 2:
-            raise ProtocolError("Cần chọn ít nhất 2 máy")
+        kind = job_kind(self.params.mode)
+        label = MODE_LABELS[self.params.mode]
+        if len(self.agents) < kind.min_machines:
+            raise ProtocolError(f"{label}: cần chọn ít nhất {kind.min_machines} máy")
+        if kind.max_machines is not None and len(self.agents) > kind.max_machines:
+            raise ProtocolError(f"{label}: chỉ chọn đúng {kind.max_machines} máy")
         replies = _parallel(self.agents, lambda c: c.info())
         problems = []
         for name, reply in replies.items():
@@ -222,17 +231,20 @@ class RunSession:
                 problems.append(str(reply))
             elif reply.get("state") not in FREE_STATES:
                 problems.append(f"{name} đang bận (lượt {reply.get('run_id')})")
-            elif (not self.params.quick and self.params.mode != "netcheck"
+            elif (kind.needs_cuda and not self.params.quick
                   and not (reply.get("gpu") or {}).get("cuda_available")):
                 problems.append(f"{name} không có GPU CUDA dùng được")
         if problems:
             raise ProtocolError("; ".join(problems))
         self.infos = replies
         self.workers = rank_order(list(replies.values()))
+        if self.rank0 in self.workers:
+            self.workers.remove(self.rank0)
+            self.workers.insert(0, self.rank0)
         # The address this controller just reached rank 0 at, not the one in rank 0's machine
         # file: DHCP may have handed out a different one since that file was written.
         self.master_addr = self._client(self.workers[0]).ref.address
-        self.run_id = new_run_id(self.params, datetime.fromtimestamp(self.clock()))
+        self.run_id = new_run_id(self.params, datetime.fromtimestamp(self.clock()), self.workers)
         self.on_event("checked", {"run_id": self.run_id, "workers": self.workers,
                                   "infos": replies})
         return [replies[name] for name in self.workers]
@@ -281,7 +293,8 @@ class RunSession:
                            agents=[asdict(c.ref) for c in self._active()],
                            decisions={k: list(v) for k, v in self.decisions.items()},
                            started_at=datetime.fromtimestamp(self.clock()).isoformat(timespec="seconds"))
-        payload = {**self._payload(), "master_addr": self.master_addr}
+        payload = {**self._payload(), "master_addr": self.master_addr,
+                   "addresses": {c.name: c.ref.address for c in self._active()}}
         for client in self._active():
             try:
                 client.start(payload)
@@ -382,15 +395,45 @@ class RunSession:
                 self.on_event("failure_detail", {"machine": name, "excerpt": excerpt})
         reason = self.stop_reason or next(
             (self._reason(n, s) for n, s in self.last_statuses.items() if s["state"] != "FINISHED"), "")
-        self._write_record(missing=sorted(missing), outcome={
-            "state": state, "reason": reason,
-            "finished_at": datetime.fromtimestamp(self.clock()).isoformat(timespec="seconds")})
+        verdict = summarize(self.params.mode, self.run_dir, self.workers)
+        finished_at = datetime.fromtimestamp(self.clock()).isoformat(timespec="seconds")
+        outcome = {"state": state, "reason": reason, "finished_at": finished_at}
+        if verdict is not None:
+            outcome["verdict"] = verdict
+            self.on_event("verdict", verdict)
+        self._write_record(missing=sorted(missing), outcome=outcome,
+                           machines={n: (i.get("report") or {}) for n, i in self.infos.items()})
+        self._append_index(state, reason, verdict, finished_at)
         self.on_event("collected", {"run_dir": str(self.run_dir), "missing": missing, "state": state})
         return self.run_dir
+
+    def _append_index(self, state: str, reason: str, verdict: dict | None, finished_at: str) -> None:
+        """One row per run in results/INDEX.csv: what ran, where, when, and how it ended."""
+        path = self.results_root / "INDEX.csv"
+        record_path = self.run_dir / "controller.json"
+        record = json.loads(record_path.read_text("utf-8")) if record_path.is_file() else {}
+        kind = self.params.mode + (" (chạy thử)" if self.params.quick else "")
+        conclusion = ""
+        if verdict is not None:
+            conclusion = f"{verdict['status']}: " + " | ".join(verdict["lines"][:4])
+        row = {"run_id": self.run_id, "loai": kind, "may": " ".join(self.workers),
+               "bat_dau": record.get("started_at", ""), "ket_thuc": finished_at,
+               "ket_qua": state, "ket_luan": conclusion, "ly_do": reason,
+               "thu_muc": os.path.relpath(self.run_dir, self.results_root).replace(os.sep, "/"),
+               "tham_so": json.dumps(self.params.to_dict(), ensure_ascii=False)}
+        path.parent.mkdir(parents=True, exist_ok=True)
+        new = not path.is_file()
+        with path.open("a", encoding="utf-8-sig" if new else "utf-8", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=list(row))
+            if new:
+                writer.writeheader()
+            writer.writerow(row)
 
     def analyze(self) -> Path | None:
         """Analyses every run of the same kind: lab runs into results/report-lab, quick runs
         into results-thu/report-thu, so trial numbers never mix with the paper's."""
+        if not job_kind(self.params.mode).analyse:
+            return None
         if self.params.quick:
             root, needle, out = self.quick_root, "thu-", self.quick_root / "report-thu"
         else:

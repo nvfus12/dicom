@@ -70,8 +70,9 @@ class FakeLauncher:
         self.process = FakeProcess()
         self.log_text = log_text
 
-    def __call__(self, argv, cwd, log_path):
+    def __call__(self, argv, cwd, log_path, extra_env=None):
         self.calls.append((argv, cwd, log_path))
+        self.extra_env = dict(extra_env or {})
         log_path.parent.mkdir(parents=True, exist_ok=True)
         log_path.write_text(self.log_text, encoding="utf-8")
         return self.process
@@ -374,6 +375,103 @@ class DefaultLauncherTest(unittest.TestCase):
             self.assertFalse(pid_alive(real_pid), "tiến trình Python thật vẫn còn chạy")
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
+
+
+class JobKindArgvTest(unittest.TestCase):
+    """Every kind of run becomes one fixed gpubench command; nothing else can be launched."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.results = self.tmp / "results"
+        self.launcher = FakeLauncher()
+        self.core = AgentCore("sim-1", lambda payload: ("allow", ""), self.launcher,
+                              configs_dir=make_configs(self.tmp), results_dir=self.results,
+                              project_dir=PROTOTYPE)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def launch(self, params, workers=WORKERS, run_id="lab-x-20261127-090000",
+               addresses=None) -> list:
+        payload = {"run_id": run_id, "controller": "C", "params": params, "workers": workers}
+        self.core.request(payload)
+        self.core.start({**payload, "master_addr": "192.168.0.103",
+                         "addresses": addresses or {"sim-0": "192.168.0.103", "sim-1": "192.168.0.101"}})
+        return self.launcher.calls[-1][0]
+
+    def arg(self, argv, flag):
+        return argv[argv.index(flag) + 1]
+
+    def test_tu_thu(self):
+        argv = self.launch({"mode": "selftest"})
+        self.assertEqual(argv[3:6], ["glootest", "-m", "sim-1"])
+        self.assertIn("--self", argv)
+        self.assertEqual(self.arg(argv, "--toward"), "192.168.0.103")
+        self.assertEqual(Path(self.arg(argv, "--json-out")),
+                         self.results / "lab-x-20261127-090000" / "diag-sim-1.json")
+
+    def test_glootest(self):
+        argv = self.launch({"mode": "glootest"})
+        self.assertEqual(argv[3], "glootest")
+        self.assertNotIn("--self", argv)
+        self.assertEqual(self.arg(argv, "--master-addr"), "192.168.0.103")
+        self.assertTrue(Path(self.arg(argv, "-e")).is_file())
+
+    def test_porttest_rank1_goi_rank0(self):
+        argv = self.launch({"mode": "porttest"})
+        self.assertEqual(argv[3:5], ["porttest", "pair"])
+        self.assertEqual((self.arg(argv, "--rank"), self.arg(argv, "--peer")), ("1", "192.168.0.103"))
+
+    def test_porttest_rank0_goi_may_con_lai(self):
+        argv = self.launch({"mode": "porttest"}, workers=["sim-1", "sim-0"])
+        self.assertEqual((self.arg(argv, "--rank"), self.arg(argv, "--peer")), ("0", "192.168.0.103"))
+
+    def test_porttest_thieu_dia_chi(self):
+        payload = {"run_id": "lab-p-1", "controller": "C", "params": {"mode": "porttest"},
+                   "workers": WORKERS}
+        self.core.request(payload)
+        with self.assertRaises(AgentError) as caught:
+            self.core.start({**payload, "master_addr": "192.168.0.103", "addresses": {"sim-0": "x"}})
+        self.assertEqual(caught.exception.status, 400)
+
+    def test_do_gpu(self):
+        argv = self.launch({"mode": "profile"}, workers=["sim-1"])
+        self.assertEqual(argv[3:6], ["profile", "-m", "sim-1"])
+        self.assertEqual(self.arg(argv, "--models"), "resnet20")
+
+    def test_single(self):
+        argv = self.launch({"mode": "single"}, workers=["sim-1"])
+        self.assertEqual(argv[3], "run")
+        self.assertTrue(Path(self.arg(argv, "-e")).is_file())
+
+    def test_cach_ket_noi_gloo_qua_bien_moi_truong(self):
+        self.launch({"mode": "ddp", "gloo_device": "interface"})
+        self.assertEqual(self.launcher.extra_env, {"GPUBENCH_GLOO_DEVICE": "interface"})
+
+    def test_mac_dinh_la_ipv4(self):
+        self.launch({"mode": "ddp"})
+        self.assertEqual(self.launcher.extra_env, {"GPUBENCH_GLOO_DEVICE": "ipv4"})
+
+    def test_chan_doan_xong_khi_co_file_ket_luan_du_ma_thoat_khac_0(self):
+        self.launch({"mode": "glootest"})
+        diag = self.results / "lab-x-20261127-090000" / "diag-sim-1.json"
+        diag.parent.mkdir(parents=True, exist_ok=True)
+        diag.write_text('{"variants": {}}', encoding="utf-8")
+        self.launcher.process.exit_code = 1          # every way failed: still a valid answer
+        self.assertEqual(self.core.status("lab-x-20261127-090000")["state"], "FINISHED")
+
+    def test_chan_doan_khong_co_file_la_loi(self):
+        self.launch({"mode": "glootest"})
+        self.launcher.process.exit_code = 1
+        self.assertEqual(self.core.status("lab-x-20261127-090000")["state"], "FAILED")
+
+    def test_thong_tin_may(self):
+        self.assertIn("report", self.core.info())        # never blocks: may still be reading
+        report = self.core.report(wait=True)
+        for key in ("python", "torch", "nvidia_driver", "plugged_in", "power_mode", "sleep_ac_minutes",
+                    "firewall_rule"):
+            self.assertIn(key, report)
+        self.assertEqual(report["python"].count("."), 2)
 
 
 class ReadProgressTest(unittest.TestCase):

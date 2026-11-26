@@ -5,6 +5,7 @@ so this file takes a few minutes.
 """
 from __future__ import annotations
 
+import csv
 import json
 import shutil
 import sys
@@ -61,10 +62,14 @@ class Lab:
     def _approver(self, name):
         return lambda payload: self.decisions.get(name, ("allow", ""))
 
-    def session(self, params: dict, clock=time.time) -> RunSession:
-        return RunSession(self.clients, validate_params(params), self.results, self.quick_results,
-                          PROTOTYPE, on_event=lambda kind, data: self.events.append((kind, data)),
-                          clock=clock)
+    def session(self, params: dict, clock=time.time, rank0=None, clients=None) -> RunSession:
+        return RunSession(self.clients if clients is None else clients, validate_params(params),
+                          self.results, self.quick_results, PROTOTYPE,
+                          on_event=lambda kind, data: self.events.append((kind, data)),
+                          clock=clock, rank0=rank0)
+
+    def verdicts(self) -> list[dict]:
+        return [data for kind, data in self.events if kind == "verdict"]
 
     def close(self):
         for core in self.cores.values():
@@ -124,6 +129,53 @@ class FullRunTest(unittest.TestCase):
 
     def test_chay_thu_sync_tron_vong(self):
         self.run_mode("sync")
+
+    def run_check(self, params: dict, **kwargs) -> tuple[RunSession, Path]:
+        s = self.lab.session(params, **kwargs)
+        s.check()
+        self.assertTrue(all(d == "allow" for d, _ in s.request_all().values()))
+        s.start()
+        statuses = poll_until_done(s, timeout=240)
+        self.assertTrue(all(st["state"] == "FINISHED" for st in statuses.values()), statuses)
+        return s, s.collect()
+
+    def test_tu_thu_tron_vong(self):
+        s, run_dir = self.run_check({"mode": "selftest"})
+        self.assertEqual(run_dir.name, s.run_id)
+        self.assertTrue(s.run_id.startswith("lab-selftest-"))
+        self.assertEqual(sorted(p.name for p in run_dir.glob("diag-*.json")),
+                         ["diag-sim-0.json", "diag-sim-1.json"])
+        verdict = self.lab.verdicts()[-1]
+        self.assertEqual(verdict["status"], "ĐẠT", verdict)
+        self.assertIn("sim-0: theo-ten-card BỎ QUA, theo-ip ĐẠT", verdict["lines"])
+        self.assertEqual(outcome(run_dir)["verdict"]["status"], "ĐẠT")
+
+    def test_glootest_doi_vai_tron_vong(self):
+        s, run_dir = self.run_check({"mode": "glootest"}, rank0="sim-1")
+        self.assertEqual(s.workers, ["sim-1", "sim-0"])
+        self.assertTrue(s.run_id.startswith("lab-glootest-sim-1-sim-0-"))
+        self.assertEqual(self.lab.verdicts()[-1]["status"], "ĐẠT", self.lab.verdicts()[-1])
+
+    def test_thong_duong_tcp_tron_vong(self):
+        s, run_dir = self.run_check({"mode": "porttest"})
+        verdict = self.lab.verdicts()[-1]
+        self.assertEqual(verdict["status"], "ĐẠT", verdict)
+        self.assertIn("sim-0 → sim-1: ĐẠT", verdict["lines"])
+
+    def test_do_gpu_mot_may_tron_vong(self):
+        s, run_dir = self.run_check({"mode": "profile", "quick": True, "dataset": "synthetic",
+                                     "model": "tiny_cnn"}, clients=self.lab.clients[:1])
+        verdict = self.lab.verdicts()[-1]
+        self.assertTrue(any(line.startswith("sim-0 tiny_cnn: batch") for line in verdict["lines"]), verdict)
+
+    def test_moi_luot_ghi_mot_dong_index(self):
+        self.run_check({"mode": "selftest"})
+        rows = list(csv.DictReader((self.lab.results / "INDEX.csv").open(encoding="utf-8-sig")))
+        self.assertEqual(rows[-1]["loai"], "selftest")
+        self.assertEqual(rows[-1]["may"], "sim-0 sim-1")
+        self.assertEqual(rows[-1]["ket_qua"], "finished")
+        self.assertIn("ĐẠT", rows[-1]["ket_luan"])
+        self.assertTrue((self.lab.results / rows[-1]["thu_muc"]).is_dir())
 
     def test_kiem_tra_mang_tron_vong(self):
         s = self.lab.session({"mode": "netcheck"})
@@ -341,6 +393,38 @@ class FakeTrainingTest(unittest.TestCase):
         core = self.lab.cores["sim-1"]
         core.machine = replace(core.machine, address=None)
         self.lab.session(quick("ddp")).check()
+
+    def test_so_may_theo_loai_luot(self):
+        with self.assertRaises(ProtocolError):
+            self.lab.session({"mode": "porttest"}, clients=self.lab.clients[:1]).check()
+        with self.assertRaises(ProtocolError) as caught:
+            self.lab.session({"mode": "single", "quick": True, "dataset": "synthetic",
+                              "model": "tiny_cnn"}).check()
+        self.assertIn("1 máy", str(caught.exception))
+        self.lab.session({"mode": "selftest"}, clients=self.lab.clients[:1]).check()
+
+    def test_do_gpu_that_can_cuda(self):
+        with self.assertRaises(ProtocolError) as caught:
+            self.lab.session({"mode": "profile"}, clients=self.lab.clients[:1]).check()
+        self.assertIn("CUDA", str(caught.exception))
+
+    def test_porttest_gui_dia_chi_cac_may(self):
+        s = self.started({"mode": "porttest"})
+        argv = self.lab.launchers["sim-0"].calls[0][0]
+        self.assertEqual(argv[argv.index("--peer") + 1], "127.0.0.1")
+        self.assertEqual(s.workers, ["sim-0", "sim-1"])
+
+    def test_index_luot_huan_luyen(self):
+        s = self.started()
+        self.finish("sim-0", s.run_id)
+        self.finish("sim-1", s.run_id)
+        s.done(s.poll_once())
+        s.collect()
+        rows = list(csv.DictReader((self.lab.quick_results.parent / "results" / "INDEX.csv")
+                                   .open(encoding="utf-8-sig")))
+        self.assertEqual((rows[-1]["run_id"], rows[-1]["loai"], rows[-1]["ket_qua"]),
+                         (s.run_id, "ddp (chạy thử)", "finished"))
+        self.assertEqual(rows[-1]["thu_muc"], f"../results-thu/{s.run_id}")
 
     def test_khong_du_hai_may(self):
         s = RunSession(self.lab.clients[:1], validate_params(quick("ddp")), self.lab.results,

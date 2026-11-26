@@ -32,10 +32,10 @@ Expand-Archive $HOME\Downloads\gpubench-pack.zip -DestinationPath E:\gpubench -F
 Kiểm tra, trong thư mục code của máy mình (`cd D:\gpubench` hoặc `cd E:\gpubench`):
 
 ```bash
-.\.venv\Scripts\python.exe -m gpubench netcheck --help
+.\.venv\Scripts\python.exe -m gpubench porttest --help
 ```
 
-Phải thấy dòng `--run-id`.
+Phải thấy chữ `pair`.
 
 ## 2. Nguồn (ngay khi tới LAB)
 
@@ -119,55 +119,25 @@ cd E:\gpubench
 
 | Lượt | Hộp thoại ghi | Thời gian |
 |---|---|---|
-| Kiểm tra mạng | "Kiểm tra mạng (khoảng 1–2 phút, không dùng GPU)" | 1–2 phút |
+| Tự thử | "Tự thử gloo trên máy này (…)" | khoảng 1 phút |
+| Thông đường TCP | "Thử thông đường TCP hai chiều giữa hai máy (…)" | khoảng 1 phút |
+| glootest | "Chẩn đoán kết nối gloo giữa các máy (…)" | tối đa 4 phút |
+| Kiểm tra mạng | "Kiểm tra mạng (…)" | 1–2 phút |
+| Đo GPU | "Đo tốc độ GPU (khoảng 3 phút)" | khoảng 3 phút |
 | Chạy thử | Dữ liệu tổng hợp, Tiny CNN | 1–2 phút |
+| Chạy thử 1 epoch | CIFAR-10, ResNet-20, 1 epoch | 1–3 phút |
 | Lượt chính | CIFAR-10, ResNet-20, 30 phút | khoảng 35 phút |
+| Single GPU | "Single GPU (huấn luyện trên một máy)", chỉ một máy được hỏi | khoảng 35 phút |
+
+Các phép chẩn đoán có thể được chạy lại vài lần (ví dụ đổi máy làm điểm gặp); mỗi lần hỏi lại. Kết quả và log tự về máy người điều phối, **không cần chụp màn hình**.
 
 **Trong lúc huấn luyện:** không dùng máy, không đóng nắp, không để máy ngủ, không đóng cửa sổ agent. Cửa sổ agent hiện "Đang được dùng để huấn luyện: …, epoch x/y".
 
 **Cần máy gấp:** bấm **Dừng huấn luyện** trên cửa sổ agent rồi xác nhận. Cả lượt dừng an toàn; người điều phối thấy ngay ai đã dừng.
 
-## 6b. Chẩn đoán kết nối giữa hai máy: glootest (chỉ khi được nhờ)
+## 6b. Lệnh chẩn đoán bằng tay (chỉ khi được nhờ)
 
-Thử lần lượt các cách mở kết nối gloo giữa hai máy và in bảng **ĐẠT / LỖI**. Cả hai máy ở **Wi-Fi router**, **đóng cửa sổ agent trước**. Lấy IP của máy `doan-tuan` bằng `ipconfig` (khối `Wi-Fi`); dưới đây gọi là `<IP doan-tuan>`, **giống nhau trên cả hai máy**.
-
-`doan-tuan` (chạy trước):
-
-```bash
-cd E:\gpubench
-```
-
-```bash
-.\.venv\Scripts\python.exe -m gpubench glootest -m doan-tuan --master-addr <IP doan-tuan>
-```
-
-`trinh-duc` (chạy trong vòng 30 giây sau):
-
-```bash
-cd D:\gpubench
-```
-
-```bash
-.\.venv\Scripts\python.exe -m gpubench glootest -m trinh-duc --master-addr <IP doan-tuan>
-```
-
-Mỗi cách chờ máy kia tối đa 90 giây, nên cả lệnh có thể mất tới khoảng 4 phút nếu có cách bị lỗi. Cuối cùng in "=== Kết quả glootest ===" với hai dòng `theo-ten-card` và `theo-ip`. **Chụp màn hình toàn bộ cửa sổ PowerShell của cả hai máy** gửi người điều phối.
-
-## 6c. Các phép thử khác (chỉ khi được nhờ)
-
-Người điều phối có thể nhờ chạy thêm các lệnh sau (trong thư mục code của máy mình, agent đã đóng). Mỗi lệnh tự in **ĐẠT** hoặc **LỖI**; chụp màn hình gửi lại.
-
-**Tự thử trên chính máy mình** (không cần máy kia, khoảng 1 phút):
-
-`trinh-duc`: `.\.venv\Scripts\python.exe -m gpubench glootest -m trinh-duc --self`
-
-`doan-tuan`: `.\.venv\Scripts\python.exe -m gpubench glootest -m doan-tuan --self`
-
-**Thông đường TCP:** máy được nhờ "nghe" chạy `.\.venv\Scripts\python.exe -m gpubench porttest listen` (chờ 3 phút); máy được nhờ "gọi" chạy `.\.venv\Scripts\python.exe -m gpubench porttest probe <IP máy kia>`.
-
-**glootest đổi vai** (máy `trinh-duc` làm điểm gặp): thêm `--set "workers=[trinh-duc,doan-tuan]"` vào lệnh glootest ở mục 6b, và cả hai máy dùng `--master-addr <IP trinh-duc>`; máy `trinh-duc` chạy trước.
-
-**Chạy thử huấn luyện bằng lệnh:** người điều phối sẽ đọc lệnh `gpubench run ...` cụ thể; lệnh trên hai máy phải giống hệt nhau trừ phần `-m`.
+Mọi phép chẩn đoán giờ chạy từ máy người điều phối qua agent. Chỉ khi giao diện không dùng được, người điều phối mới đọc cho bạn một lệnh cụ thể (`gpubench glootest …`, `gpubench porttest …`); khi đó đóng agent trước, chạy lệnh trong thư mục code của máy mình.
 
 ## 7. Khi người điều phối nhờ tắt IPv6 (chỉ khi được yêu cầu)
 

@@ -7,6 +7,7 @@ same --master-addr (rank 0's IPv4) and the same --port-base, a few seconds apart
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import socket
 import subprocess
@@ -67,7 +68,7 @@ def _attempt(kind: str, master: str, port: int, ranks: list[int], world: int, wa
 
 def run_glootest(machine_name: str, spec: ExperimentSpec, master_addr: str | None, port_base: int,
                  wait_s: int, configs_dir: Path = CONFIGS_DIR, self_test: bool = False,
-                 toward: str = "192.168.0.1") -> int:
+                 toward: str = "192.168.0.1", json_out: Path | None = None) -> int:
     machine = load_machine(machine_name, configs_dir)
     print(f"Tên card trong file máy (network_interface): {machine.network_interface}")
     print(f"Địa chỉ của tên máy {socket.gethostname()}: {', '.join(_hostname_addresses())}")
@@ -111,6 +112,15 @@ def run_glootest(machine_name: str, spec: ExperimentSpec, master_addr: str | Non
         print(f"{label:<16}{verdict}")
         for line in detail.splitlines():
             print(f"    {line}")
+    if json_out is not None:
+        json_out.parent.mkdir(parents=True, exist_ok=True)
+        json_out.write_text(json.dumps({
+            "machine": machine.name, "self_test": self_test, "master": master,
+            "network_interface": machine.network_interface,
+            "hostname_addresses": _hostname_addresses(),
+            "variants": {label: {"verdict": verdict, "detail": detail}
+                         for label, verdict, detail in results},
+        }, ensure_ascii=False, indent=2), encoding="utf-8")
     return 0 if any(verdict == "ĐẠT" for _, verdict, _ in results) else 1
 
 

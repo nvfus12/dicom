@@ -12,6 +12,7 @@ packs the results for the controller.
 from __future__ import annotations
 
 import io
+import ipaddress
 import json
 import os
 import subprocess
@@ -26,12 +27,21 @@ import yaml
 
 from ..app.config_loader import CONFIGS_DIR, PROJECT_DIR, RESULTS_DIR, load_machine
 from .protocol import (AGENT_VERSION, APPROVAL_VALID_S, ProtocolError, RunParams, build_experiment,
-                       log_excerpt, valid_run_id, validate_params)
+                       job_kind, log_excerpt, valid_run_id, validate_params)
+from .machine_report import machine_report
 
 Approver = Callable[[dict], "tuple[str, str]"]
 Launcher = Callable[[list, Path, Path], Any]
 
 FREE_STATES = ("IDLE", "FINISHED", "FAILED", "STOPPED")
+
+
+def _is_ipv4(value) -> bool:
+    try:
+        ipaddress.IPv4Address(value)
+        return True
+    except (ValueError, TypeError):
+        return False
 
 
 class AgentError(Exception):
@@ -40,9 +50,9 @@ class AgentError(Exception):
         self.status = status
 
 
-def default_launcher(argv: list, cwd: Path, log_path: Path):
+def default_launcher(argv: list, cwd: Path, log_path: Path, extra_env: dict | None = None):
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUNBUFFERED": "1"}
+    env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUNBUFFERED": "1", **(extra_env or {})}
     flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
     with log_path.open("w", encoding="utf-8") as log:
         # The child keeps its own copy of the handle; ours can close right away.
@@ -118,6 +128,8 @@ class AgentCore:
         self._started_runs: set[str] = set()   # the only runs whose results may be downloaded
         self._gpu: dict | None = None
         self._torch: str | None = None
+        self._report: dict = {}
+        self._report_thread: threading.Thread | None = None
         self._reset("IDLE")
 
     def _reset(self, state: str) -> None:
@@ -154,6 +166,21 @@ class AgentCore:
         if self._gpu is None:
             self._gpu = detect_gpu(self.machine.device, self.machine.cuda_index)
             self._torch = torch_version()
+        self._start_report()
+
+    def _start_report(self) -> None:
+        """Reads driver, power and firewall state in the background (several seconds)."""
+        if self._report_thread is None:
+            def read():
+                self._report = machine_report(self._torch)
+            self._report_thread = threading.Thread(target=read, daemon=True)
+            self._report_thread.start()
+
+    def report(self, wait: bool = False) -> dict:
+        self._start_report()
+        if wait:
+            self._report_thread.join(60)
+        return dict(self._report) if self._report else {"dang_doc": True}
 
     def info(self) -> dict:
         self.warm_up()
@@ -161,6 +188,7 @@ class AgentCore:
             self._refresh_locked()
             return {"name": self.name, "owner": self.machine.owner, "address": self.machine.address,
                     "gpu": dict(self._gpu), "torch": self._torch, "state": self._state,
+                    "report": self.report(),
                     "run_id": self._run_id, "agent_version": AGENT_VERSION}
 
     # ---------------------------------------------------------------- approval
@@ -212,8 +240,12 @@ class AgentCore:
     def start(self, payload: dict) -> dict:
         run_id, params, workers = self._parse(payload)
         master_addr = payload.get("master_addr")
-        if not isinstance(master_addr, str) or not master_addr:
-            raise AgentError(400, "Thiếu master_addr")
+        if not isinstance(master_addr, str) or not _is_ipv4(master_addr):
+            raise AgentError(400, "Thiếu hoặc sai master_addr (cần một địa chỉ IPv4)")
+        addresses = payload.get("addresses") or {}
+        if params.mode == "porttest" and not (
+                isinstance(addresses, dict) and all(_is_ipv4(addresses.get(w)) for w in workers)):
+            raise AgentError(400, "Thử thông đường cần địa chỉ IPv4 của mọi máy (addresses)")
         with self._lock:
             if self._state != "APPROVED" or self._run_id != run_id:
                 raise AgentError(409, f"Lượt {run_id} chưa được chủ máy cho phép "
@@ -224,19 +256,45 @@ class AgentCore:
             if params != self._params or workers != self._workers:
                 raise AgentError(409, "Cấu hình khác với lúc xin phép; hãy gửi lại yêu cầu")
 
-            runs_dir = self._configs_dir / "experiments" / "_runs"
-            runs_dir.mkdir(parents=True, exist_ok=True)
-            experiment = runs_dir / f"{run_id}.yaml"
-            experiment.write_text(yaml.safe_dump(build_experiment(params, workers, run_id),
-                                                 allow_unicode=True, sort_keys=True), encoding="utf-8")
-            command = "netcheck" if params.mode == "netcheck" else "run"
-            argv = [sys.executable, "-m", "gpubench", command, "-m", self.name, "-e", str(experiment),
-                    "--run-id", run_id, "--master-addr", master_addr,
-                    "--results-dir", str(self._results_dir)]
-            self._process = self._launcher(argv, self._project_dir, self._log_path(run_id))
+            argv = self._argv(params, workers, run_id, master_addr, addresses)
+            self._process = self._launcher(argv, self._project_dir, self._log_path(run_id),
+                                           {"GPUBENCH_GLOO_DEVICE": params.gloo_device})
             self._started_runs.add(run_id)
             self._state = "RUNNING"
         return self.status(run_id)
+
+    def _diag_path(self, run_id: str) -> Path:
+        return self._results_dir / run_id / f"diag-{self.name}.json"
+
+    def _argv(self, params: RunParams, workers: list[str], run_id: str, master_addr: str,
+              addresses: dict) -> list[str]:
+        """The one gpubench command each kind of run may start. Values come only from
+        validated parameters and addresses, never from free text."""
+        base = [sys.executable, "-m", "gpubench"]
+        diag = ["--json-out", str(self._diag_path(run_id))]
+        rank = workers.index(self.name)
+        if params.mode == "selftest":
+            # A port pair per rank: harmless on separate machines, needed when two agents share one.
+            return base + ["glootest", "-m", self.name, "--self", "--toward", master_addr,
+                           "--port-base", str(29620 + 2 * rank)] + diag
+        if params.mode == "porttest":
+            peer = master_addr if rank == 1 else addresses[workers[1]]
+            return base + ["porttest", "pair", "-m", self.name, "--rank", str(rank), "--peer", peer,
+                           "--port", "45000", "--window", "45"] + diag
+        if params.mode == "profile":
+            return base + ["profile", "-m", self.name, "--models", params.model] + diag
+
+        runs_dir = self._configs_dir / "experiments" / "_runs"
+        runs_dir.mkdir(parents=True, exist_ok=True)
+        experiment = runs_dir / f"{run_id}.yaml"
+        experiment.write_text(yaml.safe_dump(build_experiment(params, workers, run_id),
+                                             allow_unicode=True, sort_keys=True), encoding="utf-8")
+        if params.mode == "glootest":
+            return base + ["glootest", "-m", self.name, "-e", str(experiment),
+                           "--master-addr", master_addr] + diag
+        command = "netcheck" if params.mode == "netcheck" else "run"
+        return base + [command, "-m", self.name, "-e", str(experiment), "--run-id", run_id,
+                       "--master-addr", master_addr, "--results-dir", str(self._results_dir)]
 
     def _log_path(self, run_id: str) -> Path:
         return self._results_dir / "_agent" / f"{run_id}.log"
@@ -257,6 +315,9 @@ class AgentCore:
         self._exit_code = code
         if self._stopped_by:
             self._state = "STOPPED"
+        elif job_kind(self._params.mode).diagnostic:
+            # A check that ran to the end wrote its verdict, even when the verdict is "LỖI".
+            self._state = "FINISHED" if self._diag_path(self._run_id).is_file() else "FAILED"
         elif code == 0 and (self._params.mode == "netcheck"      # netcheck has no train_end
                             or read_progress(self._jsonl_path(self._run_id))["finished"]):
             self._state = "FINISHED"
