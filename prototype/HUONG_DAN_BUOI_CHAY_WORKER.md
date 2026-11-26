@@ -153,6 +153,22 @@ cd D:\gpubench
 
 Mỗi cách chờ máy kia tối đa 90 giây, nên cả lệnh có thể mất tới khoảng 4 phút nếu có cách bị lỗi. Cuối cùng in "=== Kết quả glootest ===" với hai dòng `theo-ten-card` và `theo-ip`. **Chụp màn hình toàn bộ cửa sổ PowerShell của cả hai máy** gửi người điều phối.
 
+## 6c. Các phép thử khác (chỉ khi được nhờ)
+
+Người điều phối có thể nhờ chạy thêm các lệnh sau (trong thư mục code của máy mình, agent đã đóng). Mỗi lệnh tự in **ĐẠT** hoặc **LỖI**; chụp màn hình gửi lại.
+
+**Tự thử trên chính máy mình** (không cần máy kia, khoảng 1 phút):
+
+`trinh-duc`: `.\.venv\Scripts\python.exe -m gpubench glootest -m trinh-duc --self`
+
+`doan-tuan`: `.\.venv\Scripts\python.exe -m gpubench glootest -m doan-tuan --self`
+
+**Thông đường TCP:** máy được nhờ "nghe" chạy `.\.venv\Scripts\python.exe -m gpubench porttest listen` (chờ 3 phút); máy được nhờ "gọi" chạy `.\.venv\Scripts\python.exe -m gpubench porttest probe <IP máy kia>`.
+
+**glootest đổi vai** (máy `trinh-duc` làm điểm gặp): thêm `--set "workers=[trinh-duc,doan-tuan]"` vào lệnh glootest ở mục 6b, và cả hai máy dùng `--master-addr <IP trinh-duc>`; máy `trinh-duc` chạy trước.
+
+**Chạy thử huấn luyện bằng lệnh:** người điều phối sẽ đọc lệnh `gpubench run ...` cụ thể; lệnh trên hai máy phải giống hệt nhau trừ phần `-m`.
+
 ## 7. Khi người điều phối nhờ tắt IPv6 (chỉ khi được yêu cầu)
 
 Dùng khi kết nối giữa hai máy bị lỗi. Chỉ tắt IPv6 trên card Wi-Fi; IPv4 (mạng router, mạng trường) vẫn chạy bình thường. **Terminal (Admin)**:

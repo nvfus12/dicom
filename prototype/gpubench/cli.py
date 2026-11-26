@@ -150,7 +150,16 @@ def cmd_glootest(args) -> int:
     from .app.glootest import run_glootest
 
     spec = load_experiment(args.experiment, parse_overrides(args.set))
-    return run_glootest(args.machine, spec, args.master_addr, args.port_base, args.wait)
+    return run_glootest(args.machine, spec, args.master_addr, args.port_base, args.wait,
+                        self_test=args.self_test, toward=args.toward)
+
+
+def cmd_porttest(args) -> int:
+    from .app import porttest
+
+    if args.porttest_action == "listen":
+        return porttest.listen(args.port, args.seconds)
+    return porttest.probe(args.host, args.port, args.timeout)
 
 
 def cmd_machines(args) -> int:
@@ -239,10 +248,26 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--experiment", "-e", default="run2_ddp_x2",
                    help="lấy danh sách máy (thứ tự rank) từ thí nghiệm này")
     p.add_argument("--set", action="append", default=[], metavar="KEY=VALUE")
-    p.add_argument("--master-addr", required=True, help="IPv4 của máy rank 0 (giống nhau trên mọi máy)")
+    p.add_argument("--master-addr", default=None,
+                   help="IPv4 của máy rank 0 (giống nhau trên mọi máy); không cần khi --self")
     p.add_argument("--port-base", type=int, default=29600, help="mỗi cách dùng một cổng: port-base, +1, ...")
     p.add_argument("--wait", type=int, default=90, help="giây chờ máy kia ở mỗi cách")
+    p.add_argument("--self", dest="self_test", action="store_true",
+                   help="tự thử trên một máy: hai tiến trình nói chuyện qua IPv4 thật của máy này")
+    p.add_argument("--toward", default="192.168.0.1",
+                   help="với --self: lấy IPv4 của card dùng để đi tới địa chỉ này (mặc định router LAB)")
     p.set_defaults(func=cmd_glootest)
+
+    p = sub.add_parser("porttest", help="thử máy kia có mở được kết nối TCP tới Python trên máy này")
+    porttest_sub = p.add_subparsers(dest="porttest_action", required=True)
+    q = porttest_sub.add_parser("listen", help="chạy trên máy được gọi tới")
+    q.add_argument("--port", type=int, default=45000)
+    q.add_argument("--seconds", type=int, default=180)
+    q = porttest_sub.add_parser("probe", help="chạy trên máy gọi đi")
+    q.add_argument("host", help="IPv4 của máy đang chạy listen")
+    q.add_argument("--port", type=int, default=45000)
+    q.add_argument("--timeout", type=float, default=5)
+    p.set_defaults(func=cmd_porttest)
 
     p = sub.add_parser("agent", help="chạy agent LAB trên worker (cửa sổ xin phép, nhận lượt chạy)")
     p.add_argument("--machine", "-m", required=True, help="tên file máy của chính máy này")

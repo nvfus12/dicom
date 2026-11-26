@@ -32,20 +32,63 @@ def _hostname_addresses() -> list[str]:
     return sorted({info[4][0] for info in infos})
 
 
-def run_glootest(machine_name: str, spec: ExperimentSpec, master_addr: str, port_base: int,
-                 wait_s: int, configs_dir: Path = CONFIGS_DIR) -> int:
-    if spec.world_size < 2:
-        raise ConfigError("glootest cần thí nghiệm có ít nhất 2 workers")
+def child_env() -> dict:
+    """Environment of one attempt: PyTorch's detailed distributed logging on, so a crash leaves
+    its last messages in the output; each way sets GLOO_SOCKET_IFNAME itself."""
+    env = {**os.environ, "PYTHONIOENCODING": "utf-8", "USE_LIBUV": "0",
+           "TORCH_CPP_LOG_LEVEL": "INFO", "TORCH_DISTRIBUTED_DEBUG": "DETAIL"}
+    env.pop("GLOO_SOCKET_IFNAME", None)
+    return env
+
+
+def _attempt(kind: str, master: str, port: int, ranks: list[int], world: int, wait_s: int,
+             interface: str) -> tuple[bool, str]:
+    """Runs one way for the given ranks of this machine, each in its own process."""
+    procs = []
+    for rank in ranks:
+        argv = [sys.executable, "-m", "gpubench.app.glootest", "--child", kind,
+                "--master-addr", master, "--port", str(port), "--rank", str(rank),
+                "--world", str(world), "--wait", str(wait_s), "--interface", interface]
+        procs.append((rank, subprocess.Popen(argv, cwd=PROJECT_DIR, env=child_env(),
+                                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                             text=True, encoding="utf-8", errors="replace")))
+    ok, outputs = True, []
+    for rank, proc in procs:
+        try:
+            output = proc.communicate(timeout=wait_s + 60)[0] or ""
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            output = f"quá {wait_s + 60} giây không xong\n" + (proc.communicate()[0] or "")
+        ok = ok and proc.returncode == 0 and OK_MARK in output
+        prefix = f"[rank {rank}] " if len(ranks) > 1 else ""
+        outputs.append("\n".join(prefix + line for line in output.splitlines()))
+    return ok, "\n".join(outputs)
+
+
+def run_glootest(machine_name: str, spec: ExperimentSpec, master_addr: str | None, port_base: int,
+                 wait_s: int, configs_dir: Path = CONFIGS_DIR, self_test: bool = False,
+                 toward: str = "192.168.0.1") -> int:
     machine = load_machine(machine_name, configs_dir)
-    if machine.name not in spec.workers:
-        raise ConfigError(f"Máy '{machine.name}' không có trong workers {list(spec.workers)}")
-    rank = spec.workers.index(machine.name)
-    print(f"Máy {machine.name}: rank {rank}/{spec.world_size}, rank 0 tại {master_addr}")
-    print(f"IPv4 dùng để đi tới rank 0: {local_ipv4_toward(master_addr, port_base)}")
     print(f"Tên card trong file máy (network_interface): {machine.network_interface}")
     print(f"Địa chỉ của tên máy {socket.gethostname()}: {', '.join(_hostname_addresses())}")
-    print("Chạy lần lượt từng cách; mỗi cách chờ máy kia tối đa "
-          f"{wait_s} giây. Hai máy phải chạy lệnh này gần như cùng lúc.\n", flush=True)
+    if self_test:
+        master = local_ipv4_toward(toward, port_base)
+        ranks, world = [0, 1], 2
+        print(f"Tự thử trên máy {machine.name}: hai tiến trình trên chính máy này nói chuyện qua "
+              f"IPv4 {master} (không cần máy kia).\n", flush=True)
+    else:
+        if not master_addr:
+            raise ConfigError("Thiếu --master-addr (IPv4 của máy rank 0). Hoặc dùng --self để "
+                              "tự thử trên một máy.")
+        if spec.world_size < 2:
+            raise ConfigError("glootest cần thí nghiệm có ít nhất 2 workers")
+        if machine.name not in spec.workers:
+            raise ConfigError(f"Máy '{machine.name}' không có trong workers {list(spec.workers)}")
+        master, ranks, world = master_addr, [spec.workers.index(machine.name)], spec.world_size
+        print(f"Máy {machine.name}: rank {ranks[0]}/{world}, rank 0 tại {master}")
+        print(f"IPv4 dùng để đi tới rank 0: {local_ipv4_toward(master, port_base)}")
+        print(f"Chạy lần lượt từng cách; mỗi cách chờ máy kia tối đa {wait_s} giây. "
+              f"Hai máy phải chạy lệnh này gần như cùng lúc.\n", flush=True)
 
     results = []
     for index, (label, kind) in enumerate(VARIANTS):
@@ -54,25 +97,16 @@ def run_glootest(machine_name: str, spec: ExperimentSpec, master_addr: str, port
             continue
         port = port_base + index
         print(f"--- {label} (cổng {port}) ...", flush=True)
-        argv = [sys.executable, "-m", "gpubench.app.glootest", "--child", kind,
-                "--master-addr", master_addr, "--port", str(port), "--rank", str(rank),
-                "--world", str(spec.world_size), "--wait", str(wait_s),
-                "--interface", machine.network_interface or ""]
-        env = {**os.environ, "PYTHONIOENCODING": "utf-8", "USE_LIBUV": "0"}
-        env.pop("GLOO_SOCKET_IFNAME", None)
-        try:
-            done = subprocess.run(argv, cwd=PROJECT_DIR, env=env, capture_output=True, text=True,
-                                  encoding="utf-8", errors="replace", timeout=wait_s + 60)
-            output, code = (done.stdout or "") + (done.stderr or ""), done.returncode
-        except subprocess.TimeoutExpired as e:
-            output, code = f"quá {wait_s + 60} giây không xong\n{e.stdout or ''}", -1
-        ok = code == 0 and OK_MARK in output
-        detail = next((line for line in output.splitlines() if OK_MARK in line), "") if ok \
-            else log_excerpt(output, max_lines=8) or f"thoát với mã {code}"
+        ok, output = _attempt(kind, master, port, ranks, world, wait_s,
+                              machine.network_interface or "")
+        if ok:
+            detail = "\n".join(line for line in output.splitlines() if OK_MARK in line)
+        else:
+            detail = log_excerpt(output, max_lines=14) or "không có thông báo"
         results.append((label, "ĐẠT" if ok else "LỖI", detail))
         print(f"    {'ĐẠT' if ok else 'LỖI'}", flush=True)
 
-    print("\n=== Kết quả glootest ===")
+    print("\n=== Kết quả glootest" + (" (tự thử trên một máy)" if self_test else "") + " ===")
     for label, verdict, detail in results:
         print(f"{label:<16}{verdict}")
         for line in detail.splitlines():

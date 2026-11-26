@@ -32,12 +32,16 @@ def free_port() -> int:
 
 
 def free_port_pair() -> int:
-    """A port p such that p and p+1 are both free: glootest uses one port per way it tries."""
-    for _ in range(50):
-        port = free_port()
+    """A port p such that p and p+1 are both free: glootest uses one port per way it tries.
+    Taken below Windows' ephemeral range (49152+), where other processes' outgoing connections
+    can grab p+1 between this check and the test, as the real default 29600 is."""
+    import random
+    for _ in range(200):
+        port = random.randrange(30000, 40000)
         try:
-            with socket.socket() as sock:
-                sock.bind(("127.0.0.1", port + 1))
+            for candidate in (port, port + 1):
+                with socket.socket() as sock:
+                    sock.bind(("0.0.0.0", candidate))
             return port
         except OSError:
             continue
@@ -84,6 +88,36 @@ class PinnedDeviceTest(unittest.TestCase):
             self.assertEqual(t.tolist(), [1.0, 1.0, 1.0])
         finally:
             g.close()
+
+
+class GlooTestSelfAndLoggingTest(unittest.TestCase):
+    def test_tien_trinh_con_bat_log_chi_tiet(self):
+        from gpubench.app import glootest
+        with mock.patch.dict(os.environ, {"GLOO_SOCKET_IFNAME": "Wi-Fi"}):
+            env = glootest.child_env()
+        self.assertEqual(env["TORCH_CPP_LOG_LEVEL"], "INFO")
+        self.assertEqual(env["TORCH_DISTRIBUTED_DEBUG"], "DETAIL")
+        self.assertEqual(env["USE_LIBUV"], "0")
+        self.assertNotIn("GLOO_SOCKET_IFNAME", env)   # each way sets it itself
+
+    def test_tu_thu_tren_mot_may(self):
+        port = free_port_pair()
+        done = subprocess.run([sys.executable, "-m", "gpubench", "glootest", "-m", "sim-0", "--self",
+                               "--toward", "127.0.0.1", "--port-base", str(port), "--wait", "60"],
+                              cwd=PROTOTYPE, env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+                              capture_output=True, text=True, encoding="utf-8", timeout=300)
+        out = done.stdout + done.stderr
+        self.assertIn("Tự thử trên máy sim-0", out)
+        self.assertIn("127.0.0.1", out)
+        self.assertRegex(out, r"theo-ip\s+ĐẠT")
+        self.assertEqual(done.returncode, 0, out)
+
+    def test_glootest_thieu_master_addr_khi_khong_tu_thu(self):
+        done = subprocess.run([sys.executable, "-m", "gpubench", "glootest", "-m", "sim-0"],
+                              cwd=PROTOTYPE, env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+                              capture_output=True, text=True, encoding="utf-8", timeout=60)
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn("--master-addr", done.stdout + done.stderr)
 
 
 class GlooTestCommandTest(unittest.TestCase):
